@@ -1,0 +1,38 @@
+{
+  "id": "ember",
+  "name": "Ember",
+  "description": "Charred wood, glowing coals and molten gold.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#1c1210",
+    "background-alt": "#140b09",
+    "surface": "#0f0706",
+    "surface-alt": "#2a1814",
+    "popover": "#2a1814",
+    "input": "#140b09",
+    "foreground": "#f6e7dc",
+    "muted": "#a88f84",
+    "accent": "#ff6b35",
+    "accent-bright": "#ffb86b",
+    "accent-dim": "#b23a12",
+    "accent-text": "#180a05",
+    "success": "#9ecb6b",
+    "warning": "#ffd166",
+    "danger": "#ff3b3b",
+    "info": "#6ec6ff"
+  },
+  "gradient": {"angle": 160, "stops": ["#3a1a10", "#1c1210", "#2a0a04"]},
+  "accent-gradient": {"angle": 90, "stops": ["#ff3b3b", "#ffb86b"]},
+  "editor": {
+    "background": "#140b09",
+    "foreground": "#f6e7dc",
+    "muted": "#957c72",
+    "line": "#2a1814",
+    "selection": "#4a241b",
+    "keyword": "#ff8c42",
+    "string": "#ffd166",
+    "number": "#ff5d5d",
+    "function": "#ffb86b",
+    "error": "#ff3b3b"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "kanagawa",
+  "name": "Kanagawa",
+  "description": "Hokusai-inspired ink, wave and autumn tones.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#1f1f28",
+    "background-alt": "#16161d",
+    "surface": "#181820",
+    "surface-alt": "#2a2a37",
+    "popover": "#2a2a37",
+    "input": "#1f1f28",
+    "foreground": "#dcd7ba",
+    "muted": "#727169",
+    "accent": "#7e9cd8",
+    "accent-bright": "#a3c0e8",
+    "accent-dim": "#5a7bb5",
+    "accent-text": "#16161d",
+    "success": "#98bb6c",
+    "warning": "#e6c384",
+    "danger": "#e46876",
+    "info": "#7fb4ca"
+  },
+  "gradient": {"angle": 160, "stops": ["#2a2a37", "#1f1f28", "#16161d"]},
+  "accent-gradient": {"angle": 90, "stops": ["#7e9cd8", "#957fb8"]},
+  "editor": {
+    "background": "#1f1f28",
+    "foreground": "#dcd7ba",
+    "muted": "#727169",
+    "line": "#2a2a37",
+    "selection": "#2d4f67",
+    "keyword": "#957fb8",
+    "string": "#98bb6c",
+    "number": "#d27e99",
+    "function": "#7e9cd8",
+    "error": "#e46876"
+  }
+}

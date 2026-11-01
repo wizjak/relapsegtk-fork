@@ -3,7 +3,24 @@
   <gresource prefix="/org/relapse/RelapseGtk">
     <file>style.css</file>
     <file>scripts/session.luau</file>
-    <file>styles/relapse.xml</file>
+    <file>themes/aurora.json</file>
+    <file>themes/dracula.json</file>
+    <file>themes/nord.json</file>
+    <file>themes/gruvbox.json</file>
+    <file>themes/one-dark.json</file>
+    <file>themes/catppuccin.json</file>
+    <file>themes/tokyo-night.json</file>
+    <file>themes/rose-pine.json</file>
+    <file>themes/kanagawa.json</file>
+    <file>themes/everforest.json</file>
+    <file>themes/solarized-dark.json</file>
+    <file>themes/github-dark.json</file>
+    <file>themes/halloween.json</file>
+    <file>themes/synthwave.json</file>
+    <file>themes/ember.json</file>
+    <file>themes/acid.json</file>
+    <file>themes/abyss.json</file>
+    <file>themes/sakura.json</file>
     <file>icons/relapse.svg</file>
     <file>icons/chevron-left.svg</file>
     <file>icons/chevron-right.svg</file>

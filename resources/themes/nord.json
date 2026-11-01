@@ -1,0 +1,38 @@
+{
+  "id": "nord",
+  "name": "Nord",
+  "description": "An arctic, north-bluish palette.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#2e3440",
+    "background-alt": "#292e39",
+    "surface": "#242933",
+    "surface-alt": "#2b303b",
+    "popover": "#2b303b",
+    "input": "#272c36",
+    "foreground": "#eceff4",
+    "muted": "#7b88a1",
+    "accent": "#88c0d0",
+    "accent-bright": "#9fd6e3",
+    "accent-dim": "#5e8c9c",
+    "accent-text": "#1c222b",
+    "success": "#a3be8c",
+    "warning": "#ebcb8b",
+    "danger": "#bf616a",
+    "info": "#81a1c1"
+  },
+  "gradient": {"angle": 160, "stops": ["#3b4252", "#2e3440", "#242933"]},
+  "accent-gradient": {"angle": 90, "stops": ["#88c0d0", "#b48ead"]},
+  "editor": {
+    "background": "#2e3440",
+    "foreground": "#d8dee9",
+    "muted": "#616e88",
+    "line": "#3b4252",
+    "selection": "#434c5e",
+    "keyword": "#81a1c1",
+    "string": "#a3be8c",
+    "number": "#b48ead",
+    "function": "#88c0d0",
+    "error": "#bf616a"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "abyss",
+  "name": "Abyss",
+  "description": "Bioluminescent teal and deep ocean blue.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#071a24",
+    "background-alt": "#04121a",
+    "surface": "#020c12",
+    "surface-alt": "#0c2836",
+    "popover": "#0c2836",
+    "input": "#04121a",
+    "foreground": "#d9f4f2",
+    "muted": "#7fa3a8",
+    "accent": "#2ee6d6",
+    "accent-bright": "#7ff5e9",
+    "accent-dim": "#14a89c",
+    "accent-text": "#03181a",
+    "success": "#4ade80",
+    "warning": "#fbbf24",
+    "danger": "#fb7185",
+    "info": "#38bdf8"
+  },
+  "gradient": {"angle": 160, "stops": ["#0b3040", "#071a24", "#01080d"]},
+  "accent-gradient": {"angle": 90, "stops": ["#2ee6d6", "#7c5cff"]},
+  "editor": {
+    "background": "#04121a",
+    "foreground": "#d9f4f2",
+    "muted": "#6e9298",
+    "line": "#0c2836",
+    "selection": "#134455",
+    "keyword": "#2ee6d6",
+    "string": "#4ade80",
+    "number": "#fb7185",
+    "function": "#38bdf8",
+    "error": "#fb7185"
+  }
+}

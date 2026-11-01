@@ -1,0 +1,38 @@
+{
+  "id": "synthwave",
+  "name": "Synthwave",
+  "description": "Neon pink, electric cyan and deep purple straight out of 1984.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#1a0b2e",
+    "background-alt": "#120720",
+    "surface": "#0d0418",
+    "surface-alt": "#26103f",
+    "popover": "#26103f",
+    "input": "#120720",
+    "foreground": "#f8e9ff",
+    "muted": "#a08cc0",
+    "accent": "#ff2a6d",
+    "accent-bright": "#05d9e8",
+    "accent-dim": "#b3004f",
+    "accent-text": "#12021f",
+    "success": "#72f1b8",
+    "warning": "#fede5d",
+    "danger": "#ff3864",
+    "info": "#05d9e8"
+  },
+  "gradient": {"angle": 145, "stops": ["#3a0f5c", "#1a0b2e", "#080112"]},
+  "accent-gradient": {"angle": 90, "stops": ["#ff2a6d", "#05d9e8"]},
+  "editor": {
+    "background": "#120720",
+    "foreground": "#f8e9ff",
+    "muted": "#8d7aa8",
+    "line": "#26103f",
+    "selection": "#4b1f6e",
+    "keyword": "#ff2a6d",
+    "string": "#05d9e8",
+    "number": "#fede5d",
+    "function": "#b967ff",
+    "error": "#ff3864"
+  }
+}

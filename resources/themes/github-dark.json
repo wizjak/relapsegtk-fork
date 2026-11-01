@@ -1,0 +1,38 @@
+{
+  "id": "github-dark",
+  "name": "GitHub Dark",
+  "description": "GitHub's familiar dark interface and syntax colours.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#0d1117",
+    "background-alt": "#010409",
+    "surface": "#161b22",
+    "surface-alt": "#21262d",
+    "popover": "#161b22",
+    "input": "#0d1117",
+    "foreground": "#e6edf3",
+    "muted": "#8b949e",
+    "accent": "#58a6ff",
+    "accent-bright": "#79c0ff",
+    "accent-dim": "#1f6feb",
+    "accent-text": "#0d1117",
+    "success": "#3fb950",
+    "warning": "#d29922",
+    "danger": "#f85149",
+    "info": "#39c5cf"
+  },
+  "gradient": {"angle": 160, "stops": ["#161b22", "#0d1117", "#010409"]},
+  "accent-gradient": {"angle": 90, "stops": ["#58a6ff", "#39c5cf"]},
+  "editor": {
+    "background": "#0d1117",
+    "foreground": "#e6edf3",
+    "muted": "#8b949e",
+    "line": "#21262d",
+    "selection": "#264f78",
+    "keyword": "#ff7b72",
+    "string": "#a5d6ff",
+    "number": "#79c0ff",
+    "function": "#d2a8ff",
+    "error": "#f85149"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "one-dark",
+  "name": "One Dark",
+  "description": "Atom's balanced dark editor palette.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#282c34",
+    "background-alt": "#21252b",
+    "surface": "#1e2227",
+    "surface-alt": "#2c313a",
+    "popover": "#21252b",
+    "input": "#1e2227",
+    "foreground": "#abb2bf",
+    "muted": "#5c6370",
+    "accent": "#61afef",
+    "accent-bright": "#82c4ff",
+    "accent-dim": "#3f7fbf",
+    "accent-text": "#10151b",
+    "success": "#98c379",
+    "warning": "#e5c07b",
+    "danger": "#e06c75",
+    "info": "#56b6c2"
+  },
+  "gradient": {"angle": 160, "stops": ["#333842", "#282c34", "#21252b"]},
+  "accent-gradient": {"angle": 90, "stops": ["#61afef", "#c678dd"]},
+  "editor": {
+    "background": "#282c34",
+    "foreground": "#abb2bf",
+    "muted": "#5c6370",
+    "line": "#2c313a",
+    "selection": "#3e4451",
+    "keyword": "#c678dd",
+    "string": "#98c379",
+    "number": "#d19a66",
+    "function": "#61afef",
+    "error": "#e06c75"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "aurora",
+  "name": "Aurora",
+  "description": "RelapseGtk's original violet glass palette.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#1b1729",
+    "background-alt": "#12101b",
+    "surface": "#0f0e14",
+    "surface-alt": "#15131d",
+    "popover": "#15131d",
+    "input": "#100f16",
+    "foreground": "#eceaf4",
+    "muted": "#a29fb4",
+    "accent": "#c5a9eb",
+    "accent-bright": "#dbc9f6",
+    "accent-dim": "#8f79be",
+    "accent-text": "#170f24",
+    "success": "#a8d28f",
+    "warning": "#dcbb7e",
+    "danger": "#ef97a0",
+    "info": "#8fc2e8"
+  },
+  "gradient": {"angle": 160, "stops": ["#241a3d", "#171325", "#0d0c13"]},
+  "accent-gradient": {"angle": 90, "stops": ["#c5a9eb", "#8fc2e8"]},
+  "editor": {
+    "background": "#12101a",
+    "foreground": "#eceaf4",
+    "muted": "#8d8a9e",
+    "line": "#191723",
+    "selection": "#3e3550",
+    "keyword": "#c5a9eb",
+    "string": "#a8d59b",
+    "number": "#d8b183",
+    "function": "#8fc2e8",
+    "error": "#ee929b"
+  }
+}

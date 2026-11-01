@@ -1,0 +1,38 @@
+{
+  "id": "gruvbox",
+  "name": "Gruvbox",
+  "description": "A warm, retro groove colour scheme.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#282828",
+    "background-alt": "#1d2021",
+    "surface": "#1d2021",
+    "surface-alt": "#32302f",
+    "popover": "#282828",
+    "input": "#1d2021",
+    "foreground": "#ebdbb2",
+    "muted": "#a89984",
+    "accent": "#fabd2f",
+    "accent-bright": "#ffd36b",
+    "accent-dim": "#b8871f",
+    "accent-text": "#1d2021",
+    "success": "#b8bb26",
+    "warning": "#fabd2f",
+    "danger": "#fb4934",
+    "info": "#83a598"
+  },
+  "gradient": {"angle": 160, "stops": ["#3c3836", "#282828", "#1d2021"]},
+  "accent-gradient": {"angle": 90, "stops": ["#fabd2f", "#fe8019"]},
+  "editor": {
+    "background": "#282828",
+    "foreground": "#ebdbb2",
+    "muted": "#928374",
+    "line": "#32302f",
+    "selection": "#504945",
+    "keyword": "#fb4934",
+    "string": "#b8bb26",
+    "number": "#d3869b",
+    "function": "#83a598",
+    "error": "#fb4934"
+  }
+}

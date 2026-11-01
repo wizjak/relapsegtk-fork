@@ -1,0 +1,38 @@
+{
+  "id": "everforest",
+  "name": "Everforest",
+  "description": "A calm, green-tinted forest palette for long sessions.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#2d353b",
+    "background-alt": "#272e33",
+    "surface": "#232a2e",
+    "surface-alt": "#343f44",
+    "popover": "#343f44",
+    "input": "#2d353b",
+    "foreground": "#d3c6aa",
+    "muted": "#859289",
+    "accent": "#a7c080",
+    "accent-bright": "#c5dba0",
+    "accent-dim": "#7a9a5e",
+    "accent-text": "#232a2e",
+    "success": "#a7c080",
+    "warning": "#dbbc7f",
+    "danger": "#e67e80",
+    "info": "#7fbbb3"
+  },
+  "gradient": {"angle": 160, "stops": ["#343f44", "#2d353b", "#232a2e"]},
+  "accent-gradient": {"angle": 90, "stops": ["#a7c080", "#7fbbb3"]},
+  "editor": {
+    "background": "#2d353b",
+    "foreground": "#d3c6aa",
+    "muted": "#859289",
+    "line": "#343f44",
+    "selection": "#475258",
+    "keyword": "#e69875",
+    "string": "#a7c080",
+    "number": "#d699b6",
+    "function": "#7fbbb3",
+    "error": "#e67e80"
+  }
+}

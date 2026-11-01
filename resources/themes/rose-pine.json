@@ -1,0 +1,38 @@
+{
+  "id": "rose-pine",
+  "name": "Rosé Pine",
+  "description": "Muted rose, pine and iris tones on a deep midnight base.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#191724",
+    "background-alt": "#1f1d2e",
+    "surface": "#17151f",
+    "surface-alt": "#14121b",
+    "popover": "#26233a",
+    "input": "#1f1d2e",
+    "foreground": "#e0def4",
+    "muted": "#6e6a86",
+    "accent": "#c4a7e7",
+    "accent-bright": "#d8c4f0",
+    "accent-dim": "#907aa9",
+    "accent-text": "#191724",
+    "success": "#9ccfd8",
+    "warning": "#f6c177",
+    "danger": "#eb6f92",
+    "info": "#9ccfd8"
+  },
+  "gradient": {"angle": 160, "stops": ["#26233a", "#1f1d2e", "#17151f"]},
+  "accent-gradient": {"angle": 90, "stops": ["#c4a7e7", "#ebbcba"]},
+  "editor": {
+    "background": "#191724",
+    "foreground": "#e0def4",
+    "muted": "#6e6a86",
+    "line": "#26233a",
+    "selection": "#403d52",
+    "keyword": "#c4a7e7",
+    "string": "#f6c177",
+    "number": "#ebbcba",
+    "function": "#9ccfd8",
+    "error": "#eb6f92"
+  }
+}

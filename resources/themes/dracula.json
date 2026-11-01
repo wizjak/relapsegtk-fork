@@ -1,0 +1,38 @@
+{
+  "id": "dracula",
+  "name": "Dracula",
+  "description": "The classic dark palette by Zeno Rocha.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#282a36",
+    "background-alt": "#21222c",
+    "surface": "#1e1f29",
+    "surface-alt": "#191a21",
+    "popover": "#21222c",
+    "input": "#1e1f29",
+    "foreground": "#f8f8f2",
+    "muted": "#6272a4",
+    "accent": "#bd93f9",
+    "accent-bright": "#d6b8ff",
+    "accent-dim": "#8f68c9",
+    "accent-text": "#1b1a24",
+    "success": "#50fa7b",
+    "warning": "#f1fa8c",
+    "danger": "#ff5555",
+    "info": "#8be9fd"
+  },
+  "gradient": {"angle": 165, "stops": ["#343746", "#282a36", "#1e1f29"]},
+  "accent-gradient": {"angle": 90, "stops": ["#bd93f9", "#ff79c6"]},
+  "editor": {
+    "background": "#282a36",
+    "foreground": "#f8f8f2",
+    "muted": "#6272a4",
+    "line": "#313342",
+    "selection": "#44475a",
+    "keyword": "#ff79c6",
+    "string": "#f1fa8c",
+    "number": "#bd93f9",
+    "function": "#50fa7b",
+    "error": "#ff5555"
+  }
+}

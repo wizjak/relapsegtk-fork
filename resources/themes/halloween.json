@@ -1,0 +1,38 @@
+{
+  "id": "halloween",
+  "name": "Halloween",
+  "description": "Pumpkin orange, witch violet and toxic green on a moonless night.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#1b1024",
+    "background-alt": "#140b1b",
+    "surface": "#0f0714",
+    "surface-alt": "#24152f",
+    "popover": "#24152f",
+    "input": "#140b1b",
+    "foreground": "#f3e9dc",
+    "muted": "#a08b9e",
+    "accent": "#ff7a18",
+    "accent-bright": "#ffb347",
+    "accent-dim": "#b34d00",
+    "accent-text": "#1a0a05",
+    "success": "#8bd450",
+    "warning": "#ffd166",
+    "danger": "#e63946",
+    "info": "#9b5de5"
+  },
+  "gradient": {"angle": 155, "stops": ["#3a1442", "#1b1024", "#2e0e05"]},
+  "accent-gradient": {"angle": 90, "stops": ["#ff7a18", "#b967ff"]},
+  "editor": {
+    "background": "#140b1b",
+    "foreground": "#f3e9dc",
+    "muted": "#8f7a8f",
+    "line": "#24152f",
+    "selection": "#4a2a55",
+    "keyword": "#ff9f1c",
+    "string": "#8bd450",
+    "number": "#c77dff",
+    "function": "#ffb347",
+    "error": "#ff5d5d"
+  }
+}

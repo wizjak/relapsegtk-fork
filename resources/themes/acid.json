@@ -1,0 +1,38 @@
+{
+  "id": "acid",
+  "name": "Acid",
+  "description": "Toxic lime, hot magenta and cold cyan on a black canvas.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#0d0f0a",
+    "background-alt": "#080a06",
+    "surface": "#050603",
+    "surface-alt": "#161a10",
+    "popover": "#161a10",
+    "input": "#080a06",
+    "foreground": "#f0f7d8",
+    "muted": "#8b9678",
+    "accent": "#c6ff00",
+    "accent-bright": "#eaff6b",
+    "accent-dim": "#8fbf00",
+    "accent-text": "#0a0c05",
+    "success": "#7dff6b",
+    "warning": "#ffe066",
+    "danger": "#ff2e88",
+    "info": "#00e5ff"
+  },
+  "gradient": {"angle": 150, "stops": ["#2a3a0a", "#0d0f0a", "#050603"]},
+  "accent-gradient": {"angle": 90, "stops": ["#c6ff00", "#ff2e88"]},
+  "editor": {
+    "background": "#080a06",
+    "foreground": "#f0f7d8",
+    "muted": "#7d886b",
+    "line": "#161a10",
+    "selection": "#2a3320",
+    "keyword": "#c6ff00",
+    "string": "#00e5ff",
+    "number": "#ff2e88",
+    "function": "#eaff6b",
+    "error": "#ff2e88"
+  }
+}

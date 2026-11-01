@@ -1,0 +1,38 @@
+{
+  "id": "sakura",
+  "name": "Sakura",
+  "description": "Blossom pink, warm peach and soft lavender after dusk.",
+  "opacity": 0.96,
+  "colors": {
+    "background": "#1f1419",
+    "background-alt": "#160e12",
+    "surface": "#120a0e",
+    "surface-alt": "#2c1a22",
+    "popover": "#2c1a22",
+    "input": "#160e12",
+    "foreground": "#fbeaf0",
+    "muted": "#b392a0",
+    "accent": "#ff8fab",
+    "accent-bright": "#ffc2d1",
+    "accent-dim": "#c25b78",
+    "accent-text": "#1a0a10",
+    "success": "#a7d397",
+    "warning": "#f2c57c",
+    "danger": "#ff5d73",
+    "info": "#9ad1e0"
+  },
+  "gradient": {"angle": 155, "stops": ["#351923", "#1f1419", "#2a0f18"]},
+  "accent-gradient": {"angle": 90, "stops": ["#ff8fab", "#ffd166"]},
+  "editor": {
+    "background": "#160e12",
+    "foreground": "#fbeaf0",
+    "muted": "#a07e8c",
+    "line": "#2c1a22",
+    "selection": "#4a2836",
+    "keyword": "#ff8fab",
+    "string": "#f2c57c",
+    "number": "#c8a2ff",
+    "function": "#9ad1e0",
+    "error": "#ff5d73"
+  }
+}
