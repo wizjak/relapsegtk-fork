@@ -898,6 +898,19 @@ void tabs_set_editor_settings(GtkWidget *tabs, const EditorSettings *settings)
     }
 }
 
+void tabs_apply_theme(GtkWidget *tabs)
+{
+    Tabs *state = g_object_get_data(G_OBJECT(tabs), "tabs");
+    if (!state || state->stopped)
+        return;
+    GtkNotebook *book = notebook_for(tabs);
+    for (int i = 0; i < gtk_notebook_get_n_pages(book); ++i) {
+        Script *script = g_object_get_data(G_OBJECT(gtk_notebook_get_nth_page(book, i)), "script");
+        if (script && script->editor)
+            editor_apply_style_scheme(script->editor);
+    }
+}
+
 void tabs_shutdown(GtkWidget *tabs)
 {
     Tabs *state = g_object_get_data(G_OBJECT(tabs), "tabs");

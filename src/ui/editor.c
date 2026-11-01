@@ -1,6 +1,15 @@
 #include "editor.h"
+#include "style.h"
 
 #include <gtksourceview/gtksource.h>
+
+void editor_apply_style_scheme(GtkWidget *editor)
+{
+    GtkSourceStyleScheme *scheme = style_editor_scheme();
+    if (scheme)
+        gtk_source_buffer_set_style_scheme(
+            GTK_SOURCE_BUFFER(gtk_text_view_get_buffer(GTK_TEXT_VIEW(editor))), scheme);
+}
 
 void editor_apply_settings(GtkWidget *editor, const EditorSettings *settings)
 {
@@ -24,14 +33,9 @@ GtkWidget *editor_new(const EditorSettings *settings)
     gtk_source_buffer_set_language(buffer, language);
     g_object_set_data_full(G_OBJECT(buffer), "languages", languages, g_object_unref);
 
-    GtkSourceStyleSchemeManager *schemes = gtk_source_style_scheme_manager_new();
-    const char *style_paths[] = {"resource:///org/relapse/RelapseGtk/styles", NULL};
-    gtk_source_style_scheme_manager_set_search_path(schemes, style_paths);
-    GtkSourceStyleScheme *scheme = gtk_source_style_scheme_manager_get_scheme(schemes, "relapse");
-    if (!scheme)
-        g_error("The bundled editor color scheme is unavailable");
-    gtk_source_buffer_set_style_scheme(buffer, scheme);
-    g_object_set_data_full(G_OBJECT(buffer), "styles", schemes, g_object_unref);
+    GtkSourceStyleScheme *scheme = style_editor_scheme();
+    if (scheme)
+        gtk_source_buffer_set_style_scheme(buffer, scheme);
     gtk_source_buffer_set_highlight_syntax(buffer, TRUE);
     gtk_source_buffer_set_highlight_matching_brackets(buffer, TRUE);
     gtk_text_buffer_set_enable_undo(GTK_TEXT_BUFFER(buffer), TRUE);

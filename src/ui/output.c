@@ -1,4 +1,5 @@
 #include "output.h"
+#include "style.h"
 #include "tab_strip.h"
 #include "profiles/store.h"
 #include <gtksourceview/gtksource.h>
@@ -172,10 +173,7 @@ static Source *ensure_source(Output *output, const char *path)
     source->buffer = GTK_TEXT_BUFFER(gtk_source_buffer_new(NULL));
     source->timestamps = g_array_new(FALSE, TRUE, sizeof(Timestamp));
     gtk_text_buffer_set_enable_undo(source->buffer, FALSE);
-    gtk_text_buffer_create_tag(source->buffer, "print", "foreground", "#d8dbe0", NULL);
-    gtk_text_buffer_create_tag(source->buffer, "info", "foreground", "#94b9e3", NULL);
-    gtk_text_buffer_create_tag(source->buffer, "warn", "foreground", "#e3bd7a", NULL);
-    gtk_text_buffer_create_tag(source->buffer, "error", "foreground", "#e28b8b", NULL);
+    style_apply_text_tags(source->buffer);
     source->tab = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(source->tab, "output-tab");
     gtk_widget_add_css_class(source->tab, "running");
@@ -213,6 +211,18 @@ void output_set_target(GtkWidget *pane, const char *path)
 {
     Output *output = g_object_get_data(G_OBJECT(pane), "output");
     if (path) select_source(ensure_source(output, path));
+}
+
+void output_apply_theme(GtkWidget *pane)
+{
+    Output *output = g_object_get_data(G_OBJECT(pane), "output");
+    if (!output)
+        return;
+    GHashTableIter iter;
+    gpointer value;
+    g_hash_table_iter_init(&iter, output->sources);
+    while (g_hash_table_iter_next(&iter, NULL, &value))
+        style_apply_text_tags(((Source *)value)->buffer);
 }
 
 void output_set_status(GtkWidget *pane, const char *path, const char *text, gboolean active)

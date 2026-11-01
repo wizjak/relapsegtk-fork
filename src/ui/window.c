@@ -1,4 +1,5 @@
 #include "window.h"
+#include "blur.h"
 #include "scripts.h"
 #include "settings.h"
 #include "tabs.h"
@@ -8,9 +9,12 @@
 #include "shader_strip.h"
 #include "profiles.h"
 
+#include <math.h>
+
 typedef struct {
     GtkWidget *tabs;
     GtkWidget *toolbar;
+    GtkWidget *shader_strip;
     GtkWidget *output;
     GtkWidget *profiles;
     GtkWidget *socket_picker;
@@ -22,6 +26,9 @@ typedef struct {
     GtkToggleButton *settings_button;
     GSimpleAction *save;
     GSimpleAction *find[3];
+    guint appearance_save;
+    AppearanceSettings pending_appearance;
+    gboolean pending_appearance_valid;
     gboolean stopped;
     WindowHandlers handlers;
     gpointer user_data;
@@ -35,6 +42,54 @@ static Window *window_data(GtkWindow *window)
 void window_set_launcher(GtkWindow *window, const char *path)
 {
     settings_set_launcher(window_data(window)->settings_page, path);
+}
+
+void window_set_appearance(GtkWindow *window, const AppearanceSettings *settings)
+{
+    Window *state = window_data(window);
+    if (!state || state->stopped || !settings)
+        return;
+
+    const char *theme_id = settings->theme && *settings->theme
+        ? settings->theme : style_default_theme_id();
+    double target_opacity = settings->opacity;
+    if (target_opacity > 0.0)
+        target_opacity = CLAMP(target_opacity, STYLE_OPACITY_MIN, STYLE_OPACITY_MAX);
+
+    gboolean theme_changed = g_strcmp0(style_current_theme_id(), theme_id) != 0;
+    if (!theme_changed && target_opacity > 0.0 &&
+        fabs(style_current_opacity() - target_opacity) > 0.0001)
+        theme_changed = TRUE;
+
+    /* Regenerating the theme also rewrites the GtkSourceView scheme, so only
+     * do it when the palette or its opacity actually changed. */
+    if (theme_changed) {
+        if (!style_set_theme(theme_id, settings->opacity) &&
+            !style_set_theme(style_default_theme_id(), settings->opacity))
+            return;
+    }
+
+    style_set_appearance(settings);
+    blur_set_enabled(window, settings->blur);
+
+    const char *title = settings->window_title && *settings->window_title
+        ? settings->window_title : APPEARANCE_TITLE_DEFAULT;
+    gtk_window_set_title(window, title);
+
+    if (state->settings_page)
+        settings_set_appearance(state->settings_page, settings);
+
+    if (theme_changed) {
+        const Theme *theme = style_current_theme();
+        if (theme && state->shader_strip) {
+            const ThemePalette *palette = theme_get_palette(theme);
+            shader_strip_set_colors(state->shader_strip, &palette->muted, &palette->accent);
+        }
+        if (state->tabs)
+            tabs_apply_theme(state->tabs);
+        if (state->output)
+            output_apply_theme(state->output);
+    }
 }
 
 void window_show_settings(GtkWindow *window)
@@ -63,6 +118,44 @@ static gboolean launcher_changed(const char *path, GError **error, gpointer user
         state->handlers.launcher_changed(path, error, state->user_data));
 }
 
+static void save_pending_appearance(Window *state)
+{
+    if (!state->pending_appearance_valid)
+        return;
+    state->pending_appearance_valid = FALSE;
+    if (!state->handlers.appearance_changed)
+        return;
+    g_autoptr(GError) error = NULL;
+    if (!state->handlers.appearance_changed(&state->pending_appearance, &error, state->user_data))
+        g_warning("Could not save appearance: %s",
+                  error ? error->message : "unknown error");
+}
+
+static gboolean appearance_save_idle(gpointer user_data)
+{
+    Window *state = user_data;
+    state->appearance_save = 0;
+    save_pending_appearance(state);
+    return G_SOURCE_REMOVE;
+}
+
+static void appearance_changed(const AppearanceSettings *settings, gpointer user_data)
+{
+    GtkWindow *window = user_data;
+    Window *state = window_data(window);
+    if (state->stopped)
+        return;
+    window_set_appearance(window, settings);
+
+    /* Sliders and the title entry emit on every step.  Apply live, but wait a
+     * moment before touching the disk so dragging does not fsync per pixel. */
+    appearance_settings_copy(&state->pending_appearance, settings);
+    state->pending_appearance_valid = TRUE;
+    if (state->appearance_save)
+        g_source_remove(state->appearance_save);
+    state->appearance_save = g_timeout_add(400, appearance_save_idle, state);
+}
+
 static void socket_selected(const char *path, gpointer user_data)
 {
     Window *state = window_data(user_data);
@@ -82,6 +175,13 @@ static gboolean profile_running(const char *name, gpointer user_data)
     Window *state = window_data(user_data);
     return state->stopped || (state->handlers.profile_running &&
         state->handlers.profile_running(name, state->user_data));
+}
+
+static void launch_relapse_requested(gpointer user_data)
+{
+    Window *state = user_data;
+    if (!state->stopped && state->handlers.launch_relapse)
+        state->handlers.launch_relapse(state->user_data);
 }
 
 static gboolean editor_visible(Window *window)
@@ -131,9 +231,17 @@ void window_set_execute_enabled(GtkWindow *window, gboolean enabled)
     toolbar_set_execute_enabled(state->toolbar, enabled && editor_visible(state));
 }
 
+void window_set_launch_enabled(GtkWindow *window, gboolean enabled)
+{
+    Window *state = window_data(window);
+    toolbar_set_launch_enabled(state->toolbar, enabled);
+}
+
 void window_set_status(GtkWindow *window, const char *label, const char *description, gboolean ready)
 {
-    toolbar_set_status(window_data(window)->toolbar, label, description, ready);
+    Window *state = window_data(window);
+    toolbar_set_status(state->toolbar, label, description, ready);
+    shader_strip_set_energy(state->shader_strip, ready ? 1.0f : 0.25f);
 }
 
 void window_open_script(GtkWindow *window, GFile *file, const char *display_name)
@@ -369,6 +477,12 @@ static void window_destroyed(GtkWidget *widget, gpointer user_data)
 {
     (void)widget;
     Window *window = user_data;
+    if (window->appearance_save) {
+        g_source_remove(window->appearance_save);
+        window->appearance_save = 0;
+    }
+    if (!window->stopped)
+        save_pending_appearance(window);
     window->stopped = TRUE;
     if (window->profiles) {
         profile_picker_shutdown(window->profiles);
@@ -395,6 +509,8 @@ static void window_destroyed(GtkWidget *widget, gpointer user_data)
 static void free_window(gpointer user_data)
 {
     window_destroyed(NULL, user_data);
+    Window *state = user_data;
+    appearance_settings_clear(&state->pending_appearance);
     g_free(user_data);
 }
 
@@ -448,7 +564,8 @@ static GtkWidget *create_titlebar(GtkWindow *window)
     GtkWidget *wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_add_css_class(wrap, "titlebar-wrap");
     gtk_box_append(GTK_BOX(wrap), bar);
-    gtk_box_append(GTK_BOX(wrap), shader_strip_new());
+    window_data(window)->shader_strip = shader_strip_new();
+    gtk_box_append(GTK_BOX(wrap), window_data(window)->shader_strip);
     return wrap;
 }
 
@@ -462,7 +579,7 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     g_object_set_data_full(G_OBJECT(window), "window", state, free_window);
     g_signal_connect(window, "destroy", G_CALLBACK(window_destroyed), state);
     gtk_window_set_default_size(window, 860, 480);
-    gtk_window_set_title(window, "relapsegtk");
+    gtk_window_set_title(window, APPEARANCE_TITLE_DEFAULT);
     gtk_window_set_titlebar(window, create_titlebar(window));
 
     state->save = g_simple_action_new("save", NULL);
@@ -508,6 +625,7 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
         .open_script   = script_selected,
         .save_active   = save_active_requested,
         .delete_active = delete_active_requested,
+        .launch_relapse = launch_relapse_requested,
     };
     state->socket_picker = socket_picker_new(socket_selected, window);
     state->toolbar = toolbar_new(window, scripts_path, state->socket_picker, &toolbar_handlers, state);
@@ -531,10 +649,17 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     gtk_widget_set_vexpand(GTK_WIDGET(state->views), TRUE);
     gtk_stack_add_titled(state->views, paned, "editor", "Editor");
     EditorSettings defaults = editor_settings_defaults();
-    state->settings_page = settings_new(&defaults, editor_settings_changed, restore_tabs_changed,
-                                        output_changed, launcher_changed, window);
+    state->settings_page = settings_new(&defaults, style_theme_list(), editor_settings_changed,
+                                        restore_tabs_changed, output_changed, launcher_changed,
+                                        appearance_changed, window);
     gtk_stack_add_titled(state->views, state->settings_page, "settings", "Settings");
     window_set_editor_settings(window, &defaults);
+    AppearanceSettings appearance = appearance_settings_defaults();
+    g_free(appearance.theme);
+    appearance.theme = g_strdup(style_current_theme_id());
+    appearance.opacity = style_current_opacity();
+    window_set_appearance(window, &appearance);
+    appearance_settings_clear(&appearance);
 
     GtkWidget *shell = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_append(GTK_BOX(shell), create_navigation(state));

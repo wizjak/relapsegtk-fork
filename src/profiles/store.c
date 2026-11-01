@@ -180,6 +180,82 @@ static void detach_launcher(gpointer user_data)
     setsid();
 }
 
+static gboolean launcher_valid(const char *launcher, GError **error)
+{
+    if (!launcher || !g_path_is_absolute(launcher) ||
+        !g_file_test(launcher, G_FILE_TEST_IS_REGULAR) || g_access(launcher, X_OK) != 0) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+            "Select an executable launcher in Settings first.");
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static gboolean process_name_matches(const char *name, const char *target)
+{
+    if (!name || !*name || !target || !*target)
+        return FALSE;
+    if (g_ascii_strcasecmp(name, target) == 0)
+        return TRUE;
+    /* Linux stores at most 15 bytes in /proc/<pid>/comm. */
+    size_t length = strlen(name);
+    return length == 15 && strlen(target) > 15 &&
+        g_ascii_strncasecmp(name, target, 15) == 0;
+}
+
+static gboolean process_is_zombie(const char *pid)
+{
+    g_autofree char *path = g_strdup_printf("/proc/%s/stat", pid);
+    g_autofree char *contents = NULL;
+    if (!g_file_get_contents(path, &contents, NULL, NULL))
+        return FALSE;
+    char *close = strrchr(contents, ')');
+    return close && close[1] == ' ' && close[2] == 'Z';
+}
+
+gboolean processes_running(const char *const *names)
+{
+    if (!names)
+        return FALSE;
+    g_autoptr(GDir) dir = g_dir_open("/proc", 0, NULL);
+    if (!dir)
+        return FALSE;
+    pid_t self = getpid();
+    const char *entry;
+    while ((entry = g_dir_read_name(dir))) {
+        if (!g_ascii_isdigit(entry[0])) continue;
+        pid_t pid = (pid_t)g_ascii_strtoll(entry, NULL, 10);
+        if (pid <= 0 || pid == self || process_is_zombie(entry)) continue;
+
+        g_autofree char *exe_path = g_strdup_printf("/proc/%s/exe", entry);
+        g_autofree char *exe = g_file_read_link(exe_path, NULL);
+        if (exe) {
+            g_autofree char *basename = g_path_get_basename(exe);
+            for (guint i = 0; names[i]; ++i)
+                if (process_name_matches(basename, names[i]))
+                    return TRUE;
+        }
+
+        g_autofree char *comm_path = g_strdup_printf("/proc/%s/comm", entry);
+        g_autofree char *comm = NULL;
+        if (!g_file_get_contents(comm_path, &comm, NULL, NULL)) continue;
+        g_strchomp(comm);
+        for (guint i = 0; names[i]; ++i)
+            if (process_name_matches(comm, names[i]))
+                return TRUE;
+    }
+    return FALSE;
+}
+
+GSubprocess *launcher_launch(const char *launcher, GError **error)
+{
+    if (!launcher_valid(launcher, error))
+        return NULL;
+    g_autoptr(GSubprocessLauncher) spawn = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE);
+    g_subprocess_launcher_set_child_setup(spawn, detach_launcher, NULL, NULL);
+    return g_subprocess_launcher_spawn(spawn, error, launcher, NULL);
+}
+
 GSubprocess *profile_launch(const char *launcher, const char *name, GError **error)
 {
     if (!profile_name_valid(name)) {
@@ -187,12 +263,8 @@ GSubprocess *profile_launch(const char *launcher, const char *name, GError **err
             "Use 1–64 letters, digits, dots, underscores or hyphens for the Profile name (excluding . and ..).");
         return NULL;
     }
-    if (!launcher || !g_path_is_absolute(launcher) ||
-        !g_file_test(launcher, G_FILE_TEST_IS_REGULAR) || g_access(launcher, X_OK) != 0) {
-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
-            "Select an executable launcher in Settings first.");
+    if (!launcher_valid(launcher, error))
         return NULL;
-    }
     if (profile_is_running(name)) {
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "This Profile is already running or being maintained.");
         return NULL;

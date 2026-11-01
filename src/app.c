@@ -4,6 +4,7 @@
 #include "ui/window.h"
 #include "settings/session.h"
 #include "settings/output.h"
+#include "settings/appearance.h"
 #include "socket/bridge.h"
 #include "profiles/store.h"
 #include "settings/launcher.h"
@@ -71,6 +72,19 @@ static gboolean save_restore_tabs(gboolean enabled, GError **error, gpointer use
     return session_settings_save(enabled, error);
 }
 
+static gboolean save_appearance(const AppearanceSettings *settings,
+                                GError **error, gpointer user_data)
+{
+    (void)user_data;
+    return appearance_settings_save(settings, error);
+}
+
+static gboolean relapse_process_running(void)
+{
+    const char *const names[] = {"sober", "relapse-launcher", NULL};
+    return processes_running(names);
+}
+
 static void update_connection_status(App *app)
 {
     switch (sessions_get_state(app->sessions, app->socket_path)) {
@@ -130,6 +144,7 @@ static gboolean refresh_profiles(gpointer user_data)
     }
     window_update_profiles(app->window, (const char *const *)names,
         (const char *const *)sockets, app->socket_path);
+    window_set_launch_enabled(app->window, !relapse_process_running());
     update_connection_status(app);
     return G_SOURCE_CONTINUE;
 }
@@ -207,6 +222,45 @@ static void launch_profile(const char *name, gpointer user_data)
     refresh_profiles(app);
 }
 
+static void launcher_finished(GObject *source, GAsyncResult *result, gpointer user_data)
+{
+    (void)user_data;
+    g_autoptr(GError) error = NULL;
+    if (!g_subprocess_wait_finish(G_SUBPROCESS(source), result, &error) &&
+        !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+        g_printerr("Launcher exited with an error: %s\n", error->message);
+    g_object_unref(source);
+}
+
+static void launch_relapse(gpointer user_data)
+{
+    App *app = user_data;
+    if (!app->launcher_path || !*app->launcher_path) {
+        window_show_settings(app->window);
+        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Select a launcher first");
+        gtk_alert_dialog_set_detail(alert, "Choose your launcher executable under Profiles in Settings, then try again.");
+        gtk_alert_dialog_show(alert, app->window);
+        return;
+    }
+    if (relapse_process_running()) {
+        window_set_launch_enabled(app->window, FALSE);
+        return;
+    }
+    g_autoptr(GError) error = NULL;
+    GSubprocess *process = launcher_launch(app->launcher_path, &error);
+    if (!process) {
+        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not launch Relapse");
+        gtk_alert_dialog_set_detail(alert, error->message);
+        gtk_alert_dialog_show(alert, app->window);
+        return;
+    }
+    /* Keep the process object alive until it exits so GLib reaps the child;
+     * the launcher itself is detached in its own session. */
+    window_set_launch_enabled(app->window, FALSE);
+    g_subprocess_wait_async(process, NULL, launcher_finished, NULL);
+    refresh_profiles(app);
+}
+
 static void execute_script(gpointer user_data)
 {
     App *app = user_data;
@@ -276,13 +330,28 @@ static void activate(GtkApplication *application, gpointer user_data)
     App *app = g_new0(App, 1);
     app->launches = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
     app->scripts_path = g_build_filename(g_get_home_dir(), "relapse-scripts-tmpdir", NULL);
+    AppearanceSettings appearance = appearance_settings_defaults();
+    g_autoptr(GError) appearance_error = NULL;
+    if (!appearance_settings_load(&appearance, &appearance_error))
+        g_printerr("Could not load appearance settings: %s\n", appearance_error->message);
+    if (!style_set_theme(appearance.theme, appearance.opacity)) {
+        g_printerr("Color scheme \"%s\" is unavailable; using %s\n",
+                   appearance.theme ? appearance.theme : "unknown", style_default_theme_id());
+        style_set_theme(style_default_theme_id(), appearance.opacity);
+        g_free(appearance.theme);
+        appearance.theme = g_strdup(style_default_theme_id());
+    }
     WindowHandlers window_handlers = {
         .execute = execute_script, .open_script = open_script, .active_script_changed = update_execute,
         .editor_settings_changed = save_editor_settings, .restore_tabs_changed = save_restore_tabs,
         .output_changed = save_output, .launcher_changed = save_launcher,
-        .socket_selected = select_socket, .launch_profile = launch_profile, .profile_running = profile_running
+        .appearance_changed = save_appearance,
+        .socket_selected = select_socket, .launch_profile = launch_profile, .profile_running = profile_running,
+        .launch_relapse = launch_relapse
     };
     app->window = window_new(application, app->scripts_path, &window_handlers, app);
+    window_set_appearance(app->window, &appearance);
+    appearance_settings_clear(&appearance);
     EditorSettings settings;
     g_autoptr(GError) settings_error = NULL;
     if (!editor_settings_load(&settings, &settings_error))

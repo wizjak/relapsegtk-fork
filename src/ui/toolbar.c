@@ -8,6 +8,7 @@ typedef struct {
     GtkWidget *save;
     GtkWidget *delete_btn;
     GtkWidget *execute;
+    GtkWidget *launch;
     GtkWidget *status;
     GtkWidget *status_label;
     ToolbarHandlers handlers;
@@ -30,6 +31,15 @@ void toolbar_set_active_enabled(GtkWidget *toolbar, gboolean enabled)
     Toolbar *state = toolbar_data(toolbar);
     gtk_widget_set_sensitive(state->save, enabled);
     gtk_widget_set_sensitive(state->delete_btn, enabled);
+}
+
+void toolbar_set_launch_enabled(GtkWidget *toolbar, gboolean enabled)
+{
+    Toolbar *state = toolbar_data(toolbar);
+    gtk_widget_set_sensitive(state->launch, enabled);
+    gtk_widget_set_tooltip_text(state->launch, enabled
+        ? "Launch the configured Relapse launcher"
+        : "Close Sober and the launcher before launching again");
 }
 
 void toolbar_set_status(GtkWidget *toolbar, const char *label, const char *description, gboolean ready)
@@ -137,6 +147,13 @@ static void delete_clicked(GtkButton *button, gpointer user_data)
         toolbar->handlers.delete_active(toolbar->user_data);
 }
 
+static void launch_clicked(GtkButton *button, gpointer user_data)
+{
+    Toolbar *toolbar = user_data;
+    if (!toolbar->stopped && gtk_widget_get_sensitive(GTK_WIDGET(button)) && toolbar->handlers.launch_relapse)
+        toolbar->handlers.launch_relapse(toolbar->user_data);
+}
+
 static GtkWidget *action_button(const char *label, const char *icon)
 {
     GtkWidget *button = gtk_button_new();
@@ -221,6 +238,13 @@ GtkWidget *toolbar_new(GtkWindow *parent, const char *scripts_path, GtkWidget *s
 
     gtk_widget_set_valign(socket_picker, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(toolbar), socket_picker);
+
+    state->launch = action_button("Launch Relapse", "/org/relapse/RelapseGtk/icons/play.svg");
+    gtk_widget_add_css_class(state->launch, "launch-relapse-button");
+    gtk_widget_set_sensitive(state->launch, FALSE);
+    gtk_widget_set_tooltip_text(state->launch, "Checking for running Relapse processes…");
+    gtk_box_append(GTK_BOX(toolbar), state->launch);
+    g_signal_connect(state->launch, "clicked", G_CALLBACK(launch_clicked), state);
 
     state->execute = action_button("Execute", "/org/relapse/RelapseGtk/icons/play.svg");
     gtk_widget_add_css_class(state->execute, "execute-script-button");

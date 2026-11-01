@@ -12,6 +12,12 @@ struct _ShaderStrip {
     GLuint vbo;
     GLint u_time;
     GLint u_res;
+    GLint u_energy;
+    GLint u_base;
+    GLint u_accent;
+    float energy;
+    GdkRGBA base_color;
+    GdkRGBA accent_color;
     GTimer *timer;
     guint tick_id;
 };
@@ -31,15 +37,19 @@ static const char *FS_SRC =
     "out vec4 frag;\n"
     "uniform float u_time;\n"
     "uniform vec2 u_res;\n"
+    "uniform float u_energy;\n"
+    "uniform vec3 u_base;\n"
+    "uniform vec3 u_accent;\n"
     "void main(){\n"
     "    float t = u_time;\n"
+    "    float e = clamp(u_energy, 0.0, 1.0);\n"
     "    float x = uv.x;\n"
     "    float sweep = 0.5 + 0.5 * sin(x * 4.5 - t * 0.6);\n"
-    "    vec3 base   = vec3(0.36, 0.39, 0.47);\n"
-    "    vec3 accent = vec3(0.68, 0.72, 0.82);\n"
+    "    vec3 base   = mix(u_base, u_accent, 0.10 + 0.15 * e);\n"
+    "    vec3 accent = mix(u_base, u_accent, 0.55 + 0.45 * e);\n"
     "    vec3 col = mix(base, accent, sweep);\n"
     "    float glint = smoothstep(0.85, 1.0, sweep);\n"
-    "    col += glint * vec3(0.10, 0.10, 0.12);\n"
+    "    col += glint * u_accent * 0.25;\n"
     "    float y = uv.y;\n"
     "    float band = smoothstep(0.0, 0.30, y) * smoothstep(1.0, 0.70, y);\n"
     "    float alpha = 0.55 + 0.35 * band;\n"
@@ -89,6 +99,9 @@ static void on_realize(GtkGLArea *area)
 
     self->u_time = glGetUniformLocation(self->program, "u_time");
     self->u_res  = glGetUniformLocation(self->program, "u_res");
+    self->u_energy = glGetUniformLocation(self->program, "u_energy");
+    self->u_base = glGetUniformLocation(self->program, "u_base");
+    self->u_accent = glGetUniformLocation(self->program, "u_accent");
 
     static const float verts[] = { -1,-1,  3,-1,  -1, 3 };
     glGenVertexArrays(1, &self->vao);
@@ -135,6 +148,11 @@ static gboolean on_render(GtkGLArea *area, GdkGLContext *ctx)
     glUseProgram(self->program);
     glUniform1f(self->u_time, (float)g_timer_elapsed(self->timer, NULL));
     glUniform2f(self->u_res, (float)w, (float)h);
+    glUniform1f(self->u_energy, self->energy);
+    glUniform3f(self->u_base, self->base_color.red, self->base_color.green,
+                self->base_color.blue);
+    glUniform3f(self->u_accent, self->accent_color.red, self->accent_color.green,
+                self->accent_color.blue);
     glBindVertexArray(self->vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     return TRUE;
@@ -142,6 +160,8 @@ static gboolean on_render(GtkGLArea *area, GdkGLContext *ctx)
 
 static void shader_strip_init(ShaderStrip *self)
 {
+    self->base_color = (GdkRGBA){.red = 0.5, .green = 0.5, .blue = 0.5, .alpha = 1.0};
+    self->accent_color = (GdkRGBA){.red = 0.65, .green = 0.65, .blue = 0.65, .alpha = 1.0};
     gtk_gl_area_set_allowed_apis(GTK_GL_AREA(self), GDK_GL_API_GLES);
     gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(self), FALSE);
     gtk_gl_area_set_has_stencil_buffer(GTK_GL_AREA(self), FALSE);
@@ -157,6 +177,25 @@ static void shader_strip_init(ShaderStrip *self)
 }
 
 static void shader_strip_class_init(ShaderStripClass *klass) { (void)klass; }
+
+void shader_strip_set_energy(GtkWidget *strip, float energy)
+{
+    g_return_if_fail(RELAPSE_IS_SHADER_STRIP(strip));
+    ShaderStrip *self = RELAPSE_SHADER_STRIP(strip);
+    self->energy = CLAMP(energy, 0.0f, 1.0f);
+}
+
+void shader_strip_set_colors(GtkWidget *strip, const GdkRGBA *base,
+                             const GdkRGBA *accent)
+{
+    g_return_if_fail(RELAPSE_IS_SHADER_STRIP(strip));
+    ShaderStrip *self = RELAPSE_SHADER_STRIP(strip);
+    if (base)
+        self->base_color = *base;
+    if (accent)
+        self->accent_color = *accent;
+    gtk_widget_queue_draw(strip);
+}
 
 GtkWidget *shader_strip_new(void)
 {
