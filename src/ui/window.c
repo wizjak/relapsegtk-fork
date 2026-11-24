@@ -1,34 +1,34 @@
 #include "window.h"
-#include "blur.h"
 #include "scripts.h"
 #include "settings.h"
 #include "tabs.h"
 #include "toolbar.h"
 #include "style.h"
 #include "output.h"
-#include "shader_strip.h"
 #include "profiles.h"
-
-#include <math.h>
+#include "accounts.h"
+#include "shader_strip.h"
+#include "topographic.h"
 
 typedef struct {
     GtkWidget *tabs;
     GtkWidget *toolbar;
-    GtkWidget *shader_strip;
     GtkWidget *output;
-    GtkWidget *profiles;
+    GtkWidget *accounts;
+    GtkWidget *scripts;
     GtkWidget *socket_picker;
-    gboolean output_enabled;
+    GtkWidget *shader_strip;
+    GtkWidget *topographic;
+    GSimpleAction *show_output;
     GtkStack *views;
     GtkWidget *editor_page;
     GtkWidget *settings_page;
     GtkToggleButton *editor_button;
+    GtkToggleButton *accounts_button;
     GtkToggleButton *settings_button;
     GSimpleAction *save;
-    GSimpleAction *find[3];
-    guint appearance_save;
-    AppearanceSettings pending_appearance;
-    gboolean pending_appearance_valid;
+    GSimpleAction *clear_untitled;
+    GSimpleAction *find[4];
     gboolean stopped;
     WindowHandlers handlers;
     gpointer user_data;
@@ -44,58 +44,47 @@ void window_set_launcher(GtkWindow *window, const char *path)
     settings_set_launcher(window_data(window)->settings_page, path);
 }
 
-void window_set_appearance(GtkWindow *window, const AppearanceSettings *settings)
+void window_set_accent(GtkWindow *window, const char *accent)
 {
     Window *state = window_data(window);
-    if (!state || state->stopped || !settings)
-        return;
-
-    const char *theme_id = settings->theme && *settings->theme
-        ? settings->theme : style_default_theme_id();
-    double target_opacity = settings->opacity;
-    if (target_opacity > 0.0)
-        target_opacity = CLAMP(target_opacity, STYLE_OPACITY_MIN, STYLE_OPACITY_MAX);
-
-    gboolean theme_changed = g_strcmp0(style_current_theme_id(), theme_id) != 0;
-    if (!theme_changed && target_opacity > 0.0 &&
-        fabs(style_current_opacity() - target_opacity) > 0.0001)
-        theme_changed = TRUE;
-
-    /* Regenerating the theme also rewrites the GtkSourceView scheme, so only
-     * do it when the palette or its opacity actually changed. */
-    if (theme_changed) {
-        if (!style_set_theme(theme_id, settings->opacity) &&
-            !style_set_theme(style_default_theme_id(), settings->opacity))
-            return;
-    }
-
-    style_set_appearance(settings);
-    blur_set_enabled(window, settings->blur);
-
-    const char *title = settings->window_title && *settings->window_title
-        ? settings->window_title : APPEARANCE_TITLE_DEFAULT;
-    gtk_window_set_title(window, title);
-
-    if (state->settings_page)
-        settings_set_appearance(state->settings_page, settings);
-
-    if (theme_changed) {
-        const Theme *theme = style_current_theme();
-        if (theme && state->shader_strip) {
-            const ThemePalette *palette = theme_get_palette(theme);
-            shader_strip_set_colors(state->shader_strip, &palette->muted, &palette->accent);
-        }
-        if (state->tabs)
-            tabs_apply_theme(state->tabs);
-        if (state->output)
-            output_apply_theme(state->output);
-    }
+    style_set_accent(gtk_widget_get_display(GTK_WIDGET(window)), accent);
+    settings_set_accent(state->settings_page, accent);
+    GdkRGBA rgba;
+    if (accent && gdk_rgba_parse(&rgba, accent) && state->shader_strip)
+        shader_strip_set_accent(state->shader_strip, &rgba);
+    if (accent && gdk_rgba_parse(&rgba, accent) && state->topographic)
+        topographic_background_set_accent(state->topographic, &rgba);
 }
 
-void window_show_settings(GtkWindow *window)
+void window_set_shader_strip_visible(GtkWindow *window, gboolean visible)
 {
     Window *state = window_data(window);
-    gtk_stack_set_visible_child(state->views, state->settings_page);
+    if (state->shader_strip)
+        gtk_widget_set_visible(GTK_WIDGET(state->shader_strip), visible);
+    if (state->settings_page)
+        settings_set_shader_strip(state->settings_page, visible);
+}
+
+void window_set_topographic_visible(GtkWindow *window, gboolean visible)
+{
+    Window *state = window_data(window);
+    if (visible)
+        gtk_widget_add_css_class(GTK_WIDGET(window), "topographic");
+    else
+        gtk_widget_remove_css_class(GTK_WIDGET(window), "topographic");
+    if (state->topographic)
+        gtk_widget_set_visible(GTK_WIDGET(state->topographic), visible);
+    if (state->settings_page)
+        settings_set_topographic(state->settings_page, visible);
+}
+
+void window_set_scripts_path(GtkWindow *window, const char *path)
+{
+    Window *state = window_data(window);
+    settings_set_scripts_path(state->settings_page, path);
+    scripts_set_directory(state->scripts, path);
+    toolbar_set_scripts_path(state->toolbar, path);
+    tabs_set_scripts_path(state->tabs, path);
 }
 
 void window_set_output_target(GtkWindow *window, const char *path)
@@ -104,11 +93,11 @@ void window_set_output_target(GtkWindow *window, const char *path)
 }
 
 void window_update_profiles(GtkWindow *window, const char *const *names,
-                            const char *const *sockets, const char *selected)
+                            const char *const *sockets)
 {
     Window *state = window_data(window);
-    profile_picker_update(state->profiles, names);
-    socket_picker_update(state->socket_picker, sockets, selected);
+    accounts_update(state->accounts, names);
+    socket_picker_update(state->socket_picker, sockets);
 }
 
 static gboolean launcher_changed(const char *path, GError **error, gpointer user_data)
@@ -118,56 +107,48 @@ static gboolean launcher_changed(const char *path, GError **error, gpointer user
         state->handlers.launcher_changed(path, error, state->user_data));
 }
 
-static void save_pending_appearance(Window *state)
+static gboolean scripts_changed(const char *path, GError **error, gpointer user_data)
 {
-    if (!state->pending_appearance_valid)
-        return;
-    state->pending_appearance_valid = FALSE;
-    if (!state->handlers.appearance_changed)
-        return;
-    g_autoptr(GError) error = NULL;
-    if (!state->handlers.appearance_changed(&state->pending_appearance, &error, state->user_data))
-        g_warning("Could not save appearance: %s",
-                  error ? error->message : "unknown error");
+    Window *state = window_data(user_data);
+    return !state->stopped && (!state->handlers.scripts_changed ||
+        state->handlers.scripts_changed(path, error, state->user_data));
 }
 
-static gboolean appearance_save_idle(gpointer user_data)
+static gboolean script_directory_changed(const char *path, GError **error, gpointer user_data)
 {
     Window *state = user_data;
-    state->appearance_save = 0;
-    save_pending_appearance(state);
-    return G_SOURCE_REMOVE;
+    return !state->stopped && (!state->handlers.scripts_changed ||
+        state->handlers.scripts_changed(path, error, state->user_data));
 }
 
-static void appearance_changed(const AppearanceSettings *settings, gpointer user_data)
-{
-    GtkWindow *window = user_data;
-    Window *state = window_data(window);
-    if (state->stopped)
-        return;
-    window_set_appearance(window, settings);
-
-    /* Sliders and the title entry emit on every step.  Apply live, but wait a
-     * moment before touching the disk so dragging does not fsync per pixel. */
-    appearance_settings_copy(&state->pending_appearance, settings);
-    state->pending_appearance_valid = TRUE;
-    if (state->appearance_save)
-        g_source_remove(state->appearance_save);
-    state->appearance_save = g_timeout_add(400, appearance_save_idle, state);
-}
-
-static void socket_selected(const char *path, gpointer user_data)
+static void socket_selected(const char *const *paths, gpointer user_data)
 {
     Window *state = window_data(user_data);
     if (!state->stopped && state->handlers.socket_selected)
-        state->handlers.socket_selected(path, state->user_data);
+        state->handlers.socket_selected(paths, state->user_data);
 }
 
-static void launch_profile(const char *name, gpointer user_data)
+void window_set_profile_launch_error(GtkWindow *window, const char *name, const char *message)
+{
+    Window *state = window_data(window);
+    if (!state->stopped) accounts_set_launch_error(state->accounts, name, message);
+}
+
+static gboolean launch_profile(const char *name, const char *place_id, const char *job_id,
+                                GError **error, gpointer user_data)
 {
     Window *state = window_data(user_data);
     if (!state->stopped && state->handlers.launch_profile)
-        state->handlers.launch_profile(name, state->user_data);
+        return state->handlers.launch_profile(name, place_id, job_id, error, state->user_data);
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_CANCELLED, "Launch cancelled.");
+    return FALSE;
+}
+
+static const ProfileJoinTarget *profile_session(const char *name, gpointer user_data)
+{
+    Window *state = window_data(user_data);
+    return !state->stopped && state->handlers.profile_session
+        ? state->handlers.profile_session(name, state->user_data) : NULL;
 }
 
 static gboolean profile_running(const char *name, gpointer user_data)
@@ -175,13 +156,6 @@ static gboolean profile_running(const char *name, gpointer user_data)
     Window *state = window_data(user_data);
     return state->stopped || (state->handlers.profile_running &&
         state->handlers.profile_running(name, state->user_data));
-}
-
-static void launch_relapse_requested(gpointer user_data)
-{
-    Window *state = user_data;
-    if (!state->stopped && state->handlers.launch_relapse)
-        state->handlers.launch_relapse(state->user_data);
 }
 
 static gboolean editor_visible(Window *window)
@@ -193,7 +167,7 @@ static gboolean editor_visible(Window *window)
 void window_set_output_enabled(GtkWindow *window, gboolean enabled)
 {
     Window *state = window_data(window);
-    state->output_enabled = enabled;
+    g_simple_action_set_state(state->show_output, g_variant_new_boolean(enabled));
     gtk_widget_set_visible(state->output, enabled);
     settings_set_output(state->settings_page, enabled);
 }
@@ -206,7 +180,7 @@ void window_set_output_status(GtkWindow *window, const char *path, const char *t
 void window_append_output(GtkWindow *window, const char *path, const char *level, const char *text)
 {
     Window *state = window_data(window);
-    if (state->output_enabled)
+    if (gtk_widget_get_visible(state->output))
         output_append(state->output, path, level, text);
 }
 
@@ -225,23 +199,21 @@ static void output_changed(gboolean enabled, gpointer user_data)
     }
 }
 
-void window_set_execute_enabled(GtkWindow *window, gboolean enabled)
+static void change_output_state(GSimpleAction *action, GVariant *value, gpointer user_data)
 {
-    Window *state = window_data(window);
-    toolbar_set_execute_enabled(state->toolbar, enabled && editor_visible(state));
+    (void)action;
+    output_changed(g_variant_get_boolean(value), user_data);
 }
 
-void window_set_launch_enabled(GtkWindow *window, gboolean enabled)
+void window_set_execute_state(GtkWindow *window, gboolean enabled, guint ready, guint selected)
 {
     Window *state = window_data(window);
-    toolbar_set_launch_enabled(state->toolbar, enabled);
+    toolbar_set_execute_state(state->toolbar, enabled && editor_visible(state), ready, selected);
 }
 
 void window_set_status(GtkWindow *window, const char *label, const char *description, gboolean ready)
 {
-    Window *state = window_data(window);
-    toolbar_set_status(state->toolbar, label, description, ready);
-    shader_strip_set_energy(state->shader_strip, ready ? 1.0f : 0.25f);
+    toolbar_set_status(window_data(window)->toolbar, label, description, ready);
 }
 
 void window_open_script(GtkWindow *window, GFile *file, const char *display_name)
@@ -303,6 +275,51 @@ static void editor_settings_changed(const EditorSettings *settings, gpointer use
     }
 }
 
+static void accent_changed(const char *accent, gpointer user_data)
+{
+    GtkWindow *window = user_data;
+    Window *state = window_data(window);
+    if (state->stopped)
+        return;
+    window_set_accent(window, accent);
+    g_autoptr(GError) error = NULL;
+    if (state->handlers.accent_changed && !state->handlers.accent_changed(accent, &error, state->user_data)) {
+        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not save accent preference");
+        gtk_alert_dialog_set_detail(alert, error ? error->message : "Unknown error");
+        gtk_alert_dialog_show(alert, window);
+    }
+}
+
+static void shader_strip_changed(gboolean enabled, gpointer user_data)
+{
+    GtkWindow *window = user_data;
+    Window *state = window_data(window);
+    if (state->stopped)
+        return;
+    window_set_shader_strip_visible(window, enabled);
+    g_autoptr(GError) error = NULL;
+    if (state->handlers.shader_strip_changed && !state->handlers.shader_strip_changed(enabled, &error, state->user_data)) {
+        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not save shader strip preference");
+        gtk_alert_dialog_set_detail(alert, error ? error->message : "Unknown error");
+        gtk_alert_dialog_show(alert, window);
+    }
+}
+
+static void topographic_changed(gboolean enabled, gpointer user_data)
+{
+    GtkWindow *window = user_data;
+    Window *state = window_data(window);
+    if (state->stopped)
+        return;
+    window_set_topographic_visible(window, enabled);
+    g_autoptr(GError) error = NULL;
+    if (state->handlers.topographic_changed && !state->handlers.topographic_changed(enabled, &error, state->user_data)) {
+        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not save topographic background preference");
+        gtk_alert_dialog_set_detail(alert, error ? error->message : "Unknown error");
+        gtk_alert_dialog_show(alert, window);
+    }
+}
+
 GtkTextBuffer *window_get_buffer(GtkWindow *window)
 {
     Window *state = window_data(window);
@@ -329,58 +346,10 @@ static void script_selected(GFile *file, const char *display_name, gpointer user
         window->handlers.open_script(file, display_name, window->user_data);
 }
 
-static GFile *script_renamed(GFile *file, const char *name, GError **error, gpointer user_data)
+static gboolean script_moved(GFile *file, GFile *destination, GError **error, gpointer user_data)
 {
     Window *window = user_data;
-    return tabs_rename(window->tabs, file, name, error);
-}
-
-static void save_active_requested(gpointer user_data)
-{
-    Window *window = user_data;
-    if (editor_visible(window))
-        tabs_save(window->tabs);
-}
-
-static void delete_finished(GObject *source, GAsyncResult *result, gpointer user_data)
-{
-    (void)user_data;
-    g_autoptr(GError) error = NULL;
-    if (!g_file_delete_finish(G_FILE(source), result, &error) &&
-        !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-        g_warning("delete failed: %s", error ? error->message : "unknown");
-}
-
-static void delete_confirmed(GObject *source, GAsyncResult *result, gpointer user_data)
-{
-    Window *window = user_data;
-    int choice = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(source), result, NULL);
-    if (choice != 1 || window->stopped) return;
-    GFile *file = tabs_get_current_file(window->tabs);
-    if (!file) return;
-    g_object_ref(file);
-    tabs_close_current(window->tabs);
-    g_file_delete_async(file, G_PRIORITY_DEFAULT, NULL, delete_finished, NULL);
-    g_object_unref(file);
-}
-
-static void delete_active_requested(gpointer user_data)
-{
-    Window *window = user_data;
-    if (!editor_visible(window)) return;
-    GFile *file = tabs_get_current_file(window->tabs);
-    if (!file) return;
-    g_autofree char *basename = g_file_get_basename(file);
-    g_autofree char *msg = g_strdup_printf("Delete %s?", basename ? basename : "this script");
-    GtkAlertDialog *alert = gtk_alert_dialog_new("%s", msg);
-    gtk_alert_dialog_set_detail(alert, "This will remove the file from disk.");
-    const char *buttons[] = {"Cancel", "Delete", NULL};
-    gtk_alert_dialog_set_buttons(alert, buttons);
-    gtk_alert_dialog_set_cancel_button(alert, 0);
-    gtk_alert_dialog_set_default_button(alert, 0);
-    GtkWindow *parent = GTK_WINDOW(gtk_widget_get_root(GTK_WIDGET(window->tabs)));
-    gtk_alert_dialog_choose(alert, parent, NULL, delete_confirmed, window);
-    g_object_unref(alert);
+    return tabs_move_file(window->tabs, file, destination, error);
 }
 
 static void tabs_changed(GtkWidget *tabs, gpointer user_data)
@@ -388,12 +357,15 @@ static void tabs_changed(GtkWidget *tabs, gpointer user_data)
     Window *window = user_data;
     if (window->stopped)
         return;
+    if (window->scripts)
+        scripts_set_active_file(window->scripts, tabs_get_current_file(tabs));
     gboolean have_buffer = editor_visible(window) && tabs_get_buffer(tabs) != NULL;
     g_simple_action_set_enabled(window->save, have_buffer);
+    gboolean in_settings = window->settings_page &&
+        gtk_stack_get_visible_child(window->views) == window->settings_page;
+    g_simple_action_set_enabled(window->clear_untitled, in_settings && tabs_can_clear_untitled(tabs));
     for (guint i = 0; i < G_N_ELEMENTS(window->find); ++i)
         g_simple_action_set_enabled(window->find[i], have_buffer);
-    if (window->toolbar)
-        toolbar_set_active_enabled(window->toolbar, have_buffer);
     if (window->handlers.active_script_changed)
         window->handlers.active_script_changed(window->user_data);
 }
@@ -414,8 +386,8 @@ static void find_requested(GSimpleAction *action, GVariant *parameter, gpointer 
     if (!editor_visible(window))
         return;
     const char *name = g_action_get_name(G_ACTION(action));
-    if (g_str_equal(name, "find"))
-        tabs_find(window->tabs);
+    if (g_str_equal(name, "find") || g_str_equal(name, "replace"))
+        tabs_find(window->tabs, g_str_equal(name, "replace"));
     else
         tabs_find_next(window->tabs, g_str_equal(name, "find-previous"));
 }
@@ -434,7 +406,10 @@ static void view_changed(GtkStack *views, GParamSpec *property, gpointer user_da
     Window *window = user_data;
     if (window->stopped || !gtk_stack_get_visible_child(views))
         return;
-    gtk_toggle_button_set_active(editor_visible(window) ? window->editor_button : window->settings_button, TRUE);
+    GtkWidget *visible = gtk_stack_get_visible_child(views);
+    GtkToggleButton *button = visible == window->editor_page ? window->editor_button
+        : visible == window->accounts ? window->accounts_button : window->settings_button;
+    gtk_toggle_button_set_active(button, TRUE);
     tabs_changed(window->tabs, window);
 }
 
@@ -446,7 +421,7 @@ static GtkToggleButton *navigation_button(const char *label, const char *view,
     gtk_widget_set_tooltip_text(button, label);
     gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
     GtkWidget *image = gtk_image_new_from_resource(icon);
-    gtk_image_set_pixel_size(GTK_IMAGE(image), 22);
+    gtk_image_set_pixel_size(GTK_IMAGE(image), 18);
     gtk_button_set_child(GTK_BUTTON(button), image);
     g_object_set_data_full(G_OBJECT(button), "view-name", g_strdup(view), g_free);
     g_signal_connect(button, "toggled", G_CALLBACK(view_selected), window);
@@ -460,10 +435,14 @@ static GtkWidget *create_navigation(Window *window)
     gtk_accessible_update_property(GTK_ACCESSIBLE(rail), GTK_ACCESSIBLE_PROPERTY_LABEL, "Navigation", -1);
     window->editor_button = navigation_button("Editor", "editor",
         "/org/relapse/RelapseGtk/icons/editor.svg", window);
+    window->accounts_button = navigation_button("Profiles", "accounts",
+        "/org/relapse/RelapseGtk/icons/profiles.svg", window);
     window->settings_button = navigation_button("Settings", "settings",
         "/org/relapse/RelapseGtk/icons/settings.svg", window);
     gtk_toggle_button_set_group(window->settings_button, window->editor_button);
+    gtk_toggle_button_set_group(window->accounts_button, window->editor_button);
     gtk_box_append(GTK_BOX(rail), GTK_WIDGET(window->editor_button));
+    gtk_box_append(GTK_BOX(rail), GTK_WIDGET(window->accounts_button));
     GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_vexpand(spacer, TRUE);
     gtk_box_append(GTK_BOX(rail), spacer);
@@ -477,16 +456,14 @@ static void window_destroyed(GtkWidget *widget, gpointer user_data)
 {
     (void)widget;
     Window *window = user_data;
-    if (window->appearance_save) {
-        g_source_remove(window->appearance_save);
-        window->appearance_save = 0;
-    }
-    if (!window->stopped)
-        save_pending_appearance(window);
     window->stopped = TRUE;
-    if (window->profiles) {
-        profile_picker_shutdown(window->profiles);
-        window->profiles = NULL;
+    if (window->scripts) {
+        scripts_shutdown(window->scripts);
+        window->scripts = NULL;
+    }
+    if (window->accounts) {
+        accounts_shutdown(window->accounts);
+        window->accounts = NULL;
     }
     if (window->settings_page) {
         settings_shutdown(window->settings_page);
@@ -502,6 +479,8 @@ static void window_destroyed(GtkWidget *widget, gpointer user_data)
     }
     g_clear_object(&window->views);
     g_clear_object(&window->save);
+    g_clear_object(&window->clear_untitled);
+    g_clear_object(&window->show_output);
     for (guint i = 0; i < G_N_ELEMENTS(window->find); ++i)
         g_clear_object(&window->find[i]);
 }
@@ -509,8 +488,6 @@ static void window_destroyed(GtkWidget *widget, gpointer user_data)
 static void free_window(gpointer user_data)
 {
     window_destroyed(NULL, user_data);
-    Window *state = user_data;
-    appearance_settings_clear(&state->pending_appearance);
     g_free(user_data);
 }
 
@@ -522,23 +499,23 @@ static void toggle_maximize(GtkWindow *window)
         gtk_window_maximize(window);
 }
 
-static GtkWidget *create_titlebar(GtkWindow *window)
+static GtkWidget *create_titlebar(GtkWindow *window, GtkWidget *strip)
 {
     GtkWidget *bar = gtk_header_bar_new();
+    gtk_widget_add_css_class(bar, "app-titlebar");
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(bar), FALSE);
+    GtkWidget *brand = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
 
     GtkWidget *logo = gtk_image_new_from_resource("/org/relapse/RelapseGtk/icons/relapse.svg");
-    gtk_image_set_pixel_size(GTK_IMAGE(logo), 20);
-    gtk_widget_add_css_class(logo, "app-logo");
-    gtk_widget_set_margin_start(logo, 4);
-    gtk_widget_set_margin_end(logo, 4);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(bar), logo);
+    gtk_image_set_pixel_size(GTK_IMAGE(logo), 16);
+    gtk_box_append(GTK_BOX(brand), logo);
 
     GtkWidget *title = gtk_label_new(NULL);
-    gtk_widget_add_css_class(title, "title");
+    gtk_widget_add_css_class(title, "app-wordmark");
     gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
     g_object_bind_property(window, "title", title, "label", G_BINDING_SYNC_CREATE);
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(bar), title);
+    gtk_box_append(GTK_BOX(brand), title);
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(bar), brand);
 
     const struct {
         const char *glyph;
@@ -550,6 +527,7 @@ static GtkWidget *create_titlebar(GtkWindow *window)
         {"×", "Close", G_CALLBACK(gtk_window_close)}
     };
     GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+    gtk_widget_set_valign(buttons, GTK_ALIGN_CENTER);
     for (guint i = 0; i < G_N_ELEMENTS(controls); ++i) {
         GtkWidget *button = gtk_button_new_with_label(controls[i].glyph);
         gtk_widget_add_css_class(button, "window-control");
@@ -560,13 +538,10 @@ static GtkWidget *create_titlebar(GtkWindow *window)
         gtk_box_append(GTK_BOX(buttons), button);
     }
     gtk_header_bar_pack_end(GTK_HEADER_BAR(bar), buttons);
-
-    GtkWidget *wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_add_css_class(wrap, "titlebar-wrap");
-    gtk_box_append(GTK_BOX(wrap), bar);
-    window_data(window)->shader_strip = shader_strip_new();
-    gtk_box_append(GTK_BOX(wrap), window_data(window)->shader_strip);
-    return wrap;
+    GtkWidget *titlebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(titlebar), bar);
+    gtk_box_append(GTK_BOX(titlebar), strip);
+    return titlebar;
 }
 
 GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
@@ -579,8 +554,10 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     g_object_set_data_full(G_OBJECT(window), "window", state, free_window);
     g_signal_connect(window, "destroy", G_CALLBACK(window_destroyed), state);
     gtk_window_set_default_size(window, 860, 480);
-    gtk_window_set_title(window, APPEARANCE_TITLE_DEFAULT);
-    gtk_window_set_titlebar(window, create_titlebar(window));
+    gtk_window_set_title(window, "Relapse");
+    gtk_window_set_icon_name(window, "org.relapse.RelapseGtk");
+    state->shader_strip = shader_strip_new();
+    gtk_window_set_titlebar(window, create_titlebar(window, state->shader_strip));
 
     state->save = g_simple_action_new("save", NULL);
     g_simple_action_set_enabled(state->save, FALSE);
@@ -589,8 +566,15 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     const char *save_accels[] = {"<Control>s", NULL};
     gtk_application_set_accels_for_action(application, "win.save", save_accels);
 
-    const char *find_names[] = {"find", "find-next", "find-previous"};
-    const char *find_accels[] = {"<Control>f", "F3", "<Shift>F3"};
+    state->clear_untitled = g_simple_action_new("clear-untitled", NULL);
+    g_action_map_add_action(G_ACTION_MAP(window), G_ACTION(state->clear_untitled));
+
+    state->show_output = g_simple_action_new_stateful("show-output", NULL, g_variant_new_boolean(FALSE));
+    g_signal_connect(state->show_output, "change-state", G_CALLBACK(change_output_state), window);
+    g_action_map_add_action(G_ACTION_MAP(window), G_ACTION(state->show_output));
+
+    const char *find_names[] = {"find", "replace", "find-next", "find-previous"};
+    const char *find_accels[] = {"<Control>f", "<Control>h", "F3", "<Shift>F3"};
     for (guint i = 0; i < G_N_ELEMENTS(find_names); ++i) {
         state->find[i] = g_simple_action_new(find_names[i], NULL);
         g_simple_action_set_enabled(state->find[i], FALSE);
@@ -601,13 +585,11 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
         gtk_application_set_accels_for_action(application, action, accels);
     }
 
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_widget_set_margin_top(box, 12);
-    gtk_widget_set_margin_bottom(box, 12);
-    gtk_widget_set_margin_start(box, 12);
-    gtk_widget_set_margin_end(box, 12);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
     state->tabs = g_object_ref_sink(tabs_new(scripts_path, tabs_changed, state));
+    g_signal_connect_object(state->clear_untitled, "activate", G_CALLBACK(tabs_clear_untitled),
+                            state->tabs, G_CONNECT_SWAPPED);
     GtkWidget *editor_split = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
     gtk_widget_add_css_class(editor_split, "editor-output-split");
     gtk_widget_set_vexpand(editor_split, TRUE);
@@ -623,48 +605,47 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     ToolbarHandlers toolbar_handlers = {
         .execute       = execute_requested,
         .open_script   = script_selected,
-        .save_active   = save_active_requested,
-        .delete_active = delete_active_requested,
-        .launch_relapse = launch_relapse_requested,
     };
     state->socket_picker = socket_picker_new(socket_selected, window);
     state->toolbar = toolbar_new(window, scripts_path, state->socket_picker, &toolbar_handlers, state);
     gtk_box_append(GTK_BOX(box), state->toolbar);
     GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    state->profiles = profile_picker_new(launch_profile, profile_running, window);
-    GtkWidget *scripts = scripts_new(scripts_path, script_selected, script_renamed, state);
-    gtk_widget_set_vexpand(scripts, TRUE);
-    gtk_box_append(GTK_BOX(sidebar), scripts);
-    gtk_box_append(GTK_BOX(sidebar), state->profiles);
-    gtk_paned_set_start_child(GTK_PANED(paned), sidebar);
+    gtk_widget_add_css_class(paned, "scripts-split");
+    state->scripts = scripts_new(scripts_path, script_selected, script_moved,
+        script_directory_changed, state);
+    gtk_widget_set_vexpand(state->scripts, TRUE);
+    gtk_paned_set_start_child(GTK_PANED(paned), state->scripts);
     gtk_paned_set_end_child(GTK_PANED(paned), box);
     gtk_paned_set_resize_start_child(GTK_PANED(paned), FALSE);
     gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
     gtk_paned_set_shrink_end_child(GTK_PANED(paned), FALSE);
-    gtk_paned_set_position(GTK_PANED(paned), 220);
+    gtk_paned_set_position(GTK_PANED(paned), 192);
     state->editor_page = paned;
     state->views = g_object_ref_sink(GTK_STACK(gtk_stack_new()));
     gtk_widget_set_hexpand(GTK_WIDGET(state->views), TRUE);
     gtk_widget_set_vexpand(GTK_WIDGET(state->views), TRUE);
     gtk_stack_add_titled(state->views, paned, "editor", "Editor");
+    state->accounts = accounts_new(launch_profile, profile_running, profile_session, window);
+    gtk_stack_add_titled(state->views, state->accounts, "accounts", "Profiles");
     EditorSettings defaults = editor_settings_defaults();
-    state->settings_page = settings_new(&defaults, style_theme_list(), editor_settings_changed,
-                                        restore_tabs_changed, output_changed, launcher_changed,
-                                        appearance_changed, window);
+    state->settings_page = settings_new(&defaults, editor_settings_changed, restore_tabs_changed,
+                                        output_changed, launcher_changed, scripts_changed,
+                                        accent_changed, shader_strip_changed,
+                                        topographic_changed, window);
     gtk_stack_add_titled(state->views, state->settings_page, "settings", "Settings");
     window_set_editor_settings(window, &defaults);
-    AppearanceSettings appearance = appearance_settings_defaults();
-    g_free(appearance.theme);
-    appearance.theme = g_strdup(style_current_theme_id());
-    appearance.opacity = style_current_opacity();
-    window_set_appearance(window, &appearance);
-    appearance_settings_clear(&appearance);
+    settings_set_scripts_path(state->settings_page, scripts_path);
 
     GtkWidget *shell = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_append(GTK_BOX(shell), create_navigation(state));
     gtk_box_append(GTK_BOX(shell), GTK_WIDGET(state->views));
-    gtk_window_set_child(window, shell);
+
+    state->topographic = topographic_background_new();
+    gtk_widget_set_visible(state->topographic, FALSE);
+    GtkWidget *overlay = gtk_overlay_new();
+    gtk_overlay_set_child(GTK_OVERLAY(overlay), state->topographic);
+    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), shell);
+    gtk_window_set_child(window, overlay);
     tabs_changed(state->tabs, state);
     if (handlers)
         state->handlers = *handlers;

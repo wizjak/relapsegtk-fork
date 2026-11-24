@@ -2,32 +2,270 @@
 #include "socket/sessions.h"
 #include "ui/style.h"
 #include "ui/window.h"
+#include "ui/console.h"
+#include "ui/dialogs.h"
 #include "settings/session.h"
 #include "settings/output.h"
-#include "settings/appearance.h"
 #include "socket/bridge.h"
 #include "profiles/store.h"
 #include "settings/launcher.h"
+#include "settings/scripts.h"
+#include "settings/appearance.h"
+#include <string.h>
+#ifdef RELAPSEGTK_UPDATE_ENABLED
+#include "update/update.h"
+#include <errno.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
     GtkWindow *window;
     Sessions *sessions;
     char *scripts_path;
     char *launcher_path;
-    char *socket_path;
+    char *accent;
+    gboolean shader_strip_visible;
+    gboolean topographic_visible;
+    char **socket_paths;
     guint discovery;
     gboolean redirect_output;
     GHashTable *launches;
+    GHashTable *consoles;
+    GHashTable *dialogs;
 } App;
 
-static gboolean refresh_profiles(gpointer user_data);
+typedef struct {
+    App *app;
+    char *path;
+    GtkWindow *window;
+} ConsoleView;
+
+static void free_console_view(gpointer user_data)
+{
+    ConsoleView *view = user_data;
+    gtk_window_destroy(view->window);
+    g_free(view->path);
+    g_free(view);
+}
+
+static void console_answer(gint64 id, const char *text, gpointer user_data)
+{
+    ConsoleView *view = user_data;
+    sessions_console_input(view->app->sessions, view->path, id, text);
+}
+
+static void console_closed(gpointer user_data)
+{
+    ConsoleView *view = user_data;
+    sessions_console_closed(view->app->sessions, view->path);
+}
+
+static ConsoleView *console_view(App *app, const char *path)
+{
+    ConsoleView *view = g_hash_table_lookup(app->consoles, path);
+    if (view) return view;
+    view = g_new0(ConsoleView, 1);
+    view->app = app;
+    view->path = g_strdup(path);
+    view->window = console_window_new(app->window, console_answer, console_closed, view);
+    g_hash_table_insert(app->consoles, view->path, view);
+    return view;
+}
+
+static void console_show(const char *path, gboolean visible, gpointer user_data)
+{
+    console_window_show(console_view(user_data, path)->window, visible);
+}
+
+static void console_title(const char *path, const char *title, gpointer user_data)
+{
+    console_window_set_title(console_view(user_data, path)->window, title);
+}
+
+static void console_clear(const char *path, gpointer user_data)
+{
+    console_window_clear(console_view(user_data, path)->window);
+}
+
+static void console_entry(const char *path, const char *level, const char *text, gpointer user_data)
+{
+    console_window_append(console_view(user_data, path)->window, level, text);
+}
+
+static void console_input(const char *path, gint64 id, gpointer user_data)
+{
+    console_window_request_input(console_view(user_data, path)->window, id);
+}
+
+static void console_destroy(const char *path, gpointer user_data)
+{
+    App *app = user_data;
+    g_hash_table_remove(app->consoles, path);
+}
+
+typedef struct {
+    App *app;
+    char *path;
+    gint64 id;
+    GtkWindow *window;
+} DialogView;
+
+static void free_dialog_view(gpointer user_data)
+{
+    DialogView *view = user_data;
+    gtk_window_destroy(view->window);
+    g_free(view->path);
+    g_free(view);
+}
+
+static void dialog_close(const char *path, gint64 id, gpointer user_data)
+{
+    App *app = user_data;
+    GHashTable *views = g_hash_table_lookup(app->dialogs, path);
+    if (views) g_hash_table_remove(views, &id);
+}
+
+static void dialog_choice(gint64 id, guint choice, gpointer user_data)
+{
+    DialogView *view = user_data;
+    App *app = view->app;
+    g_autofree char *path = g_strdup(view->path);
+    dialog_close(path, id, app);
+    sessions_dialog_choice(app->sessions, path, id, choice);
+}
+
+static void dialog_open(const char *path, gint64 id, const char *title, const char *text,
+                        const char *const *buttons, const char *icon, guint default_button, gpointer user_data)
+{
+    App *app = user_data;
+    GHashTable *views = g_hash_table_lookup(app->dialogs, path);
+    if (!views) {
+        views = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL, free_dialog_view);
+        g_hash_table_insert(app->dialogs, g_strdup(path), views);
+    }
+    DialogView *view = g_new0(DialogView, 1);
+    view->app = app;
+    view->path = g_strdup(path);
+    view->id = id;
+    view->window = dialog_window_new(app->window, id, title, text, buttons, icon, default_button, dialog_choice, view);
+    g_hash_table_insert(views, &view->id, view);
+    gtk_window_present(view->window);
+}
+
+static void dialogs_reset(const char *path, gpointer user_data)
+{
+    App *app = user_data;
+    g_hash_table_remove(app->dialogs, path);
+}
+
+static void update_connection_status(App *app);
+
+static void ready_changed(const char *path, gpointer user_data)
+{
+    App *app = user_data;
+    if (app->window && app->socket_paths && g_strv_contains((const char *const *)app->socket_paths, path))
+        update_connection_status(app);
+}
+
+#ifdef RELAPSEGTK_UPDATE_ENABLED
+typedef struct {
+    GWeakRef window;
+    UpdateInfo *info;
+} UpdateChoice;
+
+static void free_update_choice(UpdateChoice *choice)
+{
+    g_weak_ref_clear(&choice->window);
+    update_info_free(choice->info);
+    g_free(choice);
+}
+
+static void update_install_finished(const char *error, gpointer user_data)
+{
+    UpdateChoice *choice = user_data;
+    g_autoptr(GtkWindow) window = g_weak_ref_get(&choice->window);
+    if (window) {
+        App *app = g_object_get_data(G_OBJECT(window), "app");
+        if (error) {
+            update_connection_status(app);
+            g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not install the update");
+            gtk_alert_dialog_set_detail(alert, error);
+            gtk_alert_dialog_show(alert, window);
+        } else {
+            const char *image = g_getenv("APPIMAGE");
+            char *const arguments[] = {(char *)image, NULL};
+            execv(image, arguments);
+            int failure = errno;
+            update_connection_status(app);
+            g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Update installed, but restart failed");
+            gtk_alert_dialog_set_detail(alert, g_strerror(failure));
+            gtk_alert_dialog_show(alert, window);
+        }
+    }
+    free_update_choice(choice);
+}
+
+static void update_choice_finished(GObject *dialog, GAsyncResult *result, gpointer user_data)
+{
+    UpdateChoice *choice = user_data;
+    int index = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(dialog), result, NULL);
+    g_autoptr(GtkWindow) window = g_weak_ref_get(&choice->window);
+    if (index == 1 && window) {
+        window_set_status(window, "Updating", "Downloading and verifying the update…", FALSE);
+        update_install_async(choice->info, update_install_finished, choice);
+        return;
+    }
+    free_update_choice(choice);
+}
+
+static void update_checked(const UpdateInfo *info, const char *error, gpointer user_data)
+{
+    (void)error;
+    GWeakRef *owner = user_data;
+    g_autoptr(GtkWindow) window = g_weak_ref_get(owner);
+    if (window && info) {
+        g_autofree char *title = g_strdup_printf("RelapseGTK %s is available", info->version);
+        g_autofree char *detail = g_strdup_printf(
+            "You are running %s.\nSource: %s\n\nRelapseGTK will verify the update and restart automatically.",
+            update_current_version(), update_repository());
+        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("%s", title);
+        gtk_alert_dialog_set_detail(alert, detail);
+        const char *buttons[] = {"Later", "Update", NULL};
+        gtk_alert_dialog_set_buttons(alert, buttons);
+        gtk_alert_dialog_set_cancel_button(alert, 0);
+        gtk_alert_dialog_set_default_button(alert, 0);
+        UpdateChoice *choice = g_new0(UpdateChoice, 1);
+        g_weak_ref_init(&choice->window, window);
+        choice->info = update_info_copy(info);
+        gtk_alert_dialog_choose(alert, window, NULL, update_choice_finished, choice);
+    }
+    g_weak_ref_clear(owner);
+    g_free(owner);
+}
+
+static void check_updates(App *app)
+{
+    if (!update_is_configured()) return;
+    GWeakRef *owner = g_new0(GWeakRef, 1);
+    g_weak_ref_init(owner, app->window);
+    update_check_async(update_checked, owner);
+}
+#endif
+
+static guint count_ready_clients(App *app)
+{
+    guint ready = 0;
+    for (guint i = 0; app->socket_paths && app->socket_paths[i]; ++i)
+        if (sessions_can_execute(app->sessions, app->socket_paths[i])) ++ready;
+    return ready;
+}
 
 static void update_execute(gpointer user_data)
 {
     App *app = user_data;
-    window_set_execute_enabled(app->window,
-        sessions_can_execute(app->sessions, app->socket_path) &&
-        window_get_buffer(app->window) != NULL);
+    guint selected = app->socket_paths ? g_strv_length(app->socket_paths) : 0;
+    guint ready = count_ready_clients(app);
+    window_set_execute_state(app->window, ready > 0 && window_get_buffer(app->window) != NULL, ready, selected);
 }
 
 static void output_state_changed(const char *path, OutputState state, const char *detail, gpointer user_data)
@@ -37,7 +275,7 @@ static void output_state_changed(const char *path, OutputState state, const char
         sessions_is_active(app->sessions, path));
     if (state == OUTPUT_FAILED)
         window_append_output(app->window, path, "error", detail);
-    update_execute(app);
+    update_connection_status(app);
 }
 
 static void output_entry(const char *path, const char *level, const char *text, gpointer user_data)
@@ -72,24 +310,19 @@ static gboolean save_restore_tabs(gboolean enabled, GError **error, gpointer use
     return session_settings_save(enabled, error);
 }
 
-static gboolean save_appearance(const AppearanceSettings *settings,
-                                GError **error, gpointer user_data)
-{
-    (void)user_data;
-    return appearance_settings_save(settings, error);
-}
-
-static gboolean relapse_process_running(void)
-{
-    const char *const names[] = {"sober", "relapse-launcher", NULL};
-    return processes_running(names);
-}
-
 static void update_connection_status(App *app)
 {
-    switch (sessions_get_state(app->sessions, app->socket_path)) {
+    guint selected = app->socket_paths ? g_strv_length(app->socket_paths) : 0;
+    guint ready = count_ready_clients(app);
+    if (selected > 1) {
+        g_autofree char *label = g_strdup_printf("%u of %u ready", ready, selected);
+        window_set_status(app->window, label, "Execute sends to the selected clients that are ready.", ready > 0);
+    } else if (!selected) {
+        window_set_status(app->window, NULL, "No target selected. Choose a client beside Execute.", FALSE);
+    } else switch (sessions_get_state(app->sessions, app->socket_paths[0])) {
         case SOCKET_CLIENT_READY:
-            window_set_status(app->window, "Ready", "Connected. Ready to execute scripts.", TRUE);
+            window_set_status(app->window, ready ? "Ready" : "Starting UI",
+                ready ? "Connected. Ready to execute scripts." : "Waiting for the UI helpers to connect.", ready > 0);
             break;
         case SOCKET_CLIENT_WAITING:
             window_set_status(app->window, "Not ready", "Connected. Waiting for a game to be ready.", FALSE);
@@ -106,10 +339,12 @@ static void socket_state_changed(const char *path, SocketClientState state, cons
     (void)detail;
     App *app = user_data;
     gboolean active = sessions_is_active(app->sessions, path);
-    if (state != SOCKET_CLIENT_READY)
+    if (state != SOCKET_CLIENT_READY) {
+        g_hash_table_remove(app->consoles, path);
         window_set_output_status(app->window, path,
             !active ? "Closed" : state == SOCKET_CLIENT_WAITING ? "Waiting for a game" : "Reconnecting…", active);
-    if (g_strcmp0(path, app->socket_path) == 0) update_connection_status(app);
+    }
+    if (app->socket_paths && g_strv_contains((const char *const *)app->socket_paths, path)) update_connection_status(app);
 }
 
 static void script_result(const char *path, gint64 script_id, gboolean submitted, const char *detail, gpointer user_data)
@@ -120,16 +355,14 @@ static void script_result(const char *path, gint64 script_id, gboolean submitted
         window_append_output(app->window, path, "error", detail ? detail : "Script submission failed.");
 }
 
-static void select_socket(const char *path, gpointer user_data)
+static void select_socket(const char *const *paths, gpointer user_data)
 {
     App *app = user_data;
-    if (g_strcmp0(path, app->socket_path) == 0) return;
-    g_autofree char *selected = g_strdup(path);
-    g_free(app->socket_path);
-    app->socket_path = g_steal_pointer(&selected);
-    window_set_output_target(app->window, app->socket_path);
+    g_auto(GStrv) selected = g_strdupv((char **)paths);
+    g_strfreev(app->socket_paths);
+    app->socket_paths = g_steal_pointer(&selected);
+    if (paths[0] && !paths[1]) window_set_output_target(app->window, paths[0]);
     update_connection_status(app);
-    refresh_profiles(app);
 }
 
 static gboolean refresh_profiles(gpointer user_data)
@@ -138,13 +371,9 @@ static gboolean refresh_profiles(gpointer user_data)
     g_auto(GStrv) names = profiles_list();
     g_auto(GStrv) sockets = profile_sockets_list("/tmp");
     sessions_update(app->sessions, (const char *const *)sockets);
-    if ((!app->socket_path && sockets[0]) || (app->socket_path && !sockets[0])) {
-        select_socket(sockets[0], app);
-        return G_SOURCE_CONTINUE;
-    }
+    g_auto(GStrv) active = sessions_list_active(app->sessions);
     window_update_profiles(app->window, (const char *const *)names,
-        (const char *const *)sockets, app->socket_path);
-    window_set_launch_enabled(app->window, !relapse_process_running());
+        (const char *const *)active);
     update_connection_status(app);
     return G_SOURCE_CONTINUE;
 }
@@ -156,6 +385,48 @@ static gboolean save_launcher(const char *path, GError **error, gpointer user_da
     g_free(app->launcher_path);
     app->launcher_path = g_strdup(path);
     return TRUE;
+}
+
+static gboolean save_scripts_path(const char *path, GError **error, gpointer user_data)
+{
+    App *app = user_data;
+    if (!scripts_settings_save(path, error)) return FALSE;
+    g_free(app->scripts_path);
+    app->scripts_path = g_strdup(path);
+    window_set_scripts_path(app->window, path);
+    return TRUE;
+}
+
+static gboolean save_accent(const char *accent, GError **error, gpointer user_data)
+{
+    App *app = user_data;
+    g_free(app->accent);
+    app->accent = g_strdup(accent);
+    return appearance_settings_save(accent, app->shader_strip_visible,
+                                    app->topographic_visible, error);
+}
+
+static gboolean save_shader_strip(gboolean enabled, GError **error, gpointer user_data)
+{
+    App *app = user_data;
+    app->shader_strip_visible = enabled;
+    window_set_shader_strip_visible(app->window, enabled);
+    return appearance_settings_save(app->accent, enabled, app->topographic_visible, error);
+}
+
+static gboolean save_topographic(gboolean enabled, GError **error, gpointer user_data)
+{
+    App *app = user_data;
+    app->topographic_visible = enabled;
+    window_set_topographic_visible(app->window, enabled);
+    return appearance_settings_save(app->accent, app->shader_strip_visible, enabled, error);
+}
+
+static const ProfileJoinTarget *profile_session(const char *name, gpointer user_data)
+{
+    App *app = user_data;
+    g_autofree char *path = g_strdup_printf("/tmp/relapse-%s.sock", name);
+    return sessions_join_target(app->sessions, path);
 }
 
 static gboolean profile_running(const char *name, gpointer user_data)
@@ -179,112 +450,60 @@ static void launch_finished(GObject *process, GAsyncResult *result, gpointer use
     if (app && app->window) {
         g_hash_table_remove(app->launches, launch->name);
         refresh_profiles(app);
-        if (!success) {
-            g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Profile %s exited with an error", launch->name);
-            gtk_alert_dialog_set_detail(alert, error->message);
-            gtk_alert_dialog_show(alert, window);
-        }
+        if (!success) window_set_profile_launch_error(window, launch->name, error->message);
     }
     g_weak_ref_clear(&launch->window);
     g_free(launch->name);
     g_free(launch);
 }
 
-static void launch_profile(const char *name, gpointer user_data)
+static gboolean launch_profile(const char *name, const char *place_id, const char *job_id,
+                                GError **error, gpointer user_data)
 {
     App *app = user_data;
-    g_autoptr(GError) error = NULL;
     if (!app->launcher_path || !*app->launcher_path) {
-        window_show_settings(app->window);
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Select a launcher first");
-        gtk_alert_dialog_set_detail(alert, "Choose your launcher executable under Profiles in Settings, then launch again.");
-        gtk_alert_dialog_show(alert, app->window);
-        return;
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Choose a launcher in Settings first.");
+        return FALSE;
     }
     if (g_hash_table_contains(app->launches, name)) {
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Profile %s is already running", name);
-        gtk_alert_dialog_set_detail(alert, "Select its socket in the titlebar to connect when it becomes available.");
-        gtk_alert_dialog_show(alert, app->window);
-        return;
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "This profile is already running.");
+        return FALSE;
     }
-    GSubprocess *process = profile_launch(app->launcher_path, name, &error);
-    if (!process) {
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not launch Profile %s", name);
-        gtk_alert_dialog_set_detail(alert, error->message);
-        gtk_alert_dialog_show(alert, app->window);
-        return;
-    }
+    GSubprocess *process = profile_launch(app->launcher_path, name, place_id, job_id, error);
+    if (!process) return FALSE;
     g_hash_table_insert(app->launches, g_strdup(name), process);
     Launch *launch = g_new0(Launch, 1);
     g_weak_ref_init(&launch->window, app->window);
     launch->name = g_strdup(name);
     g_subprocess_wait_check_async(process, NULL, launch_finished, launch);
     refresh_profiles(app);
-}
-
-static void launcher_finished(GObject *source, GAsyncResult *result, gpointer user_data)
-{
-    (void)user_data;
-    g_autoptr(GError) error = NULL;
-    if (!g_subprocess_wait_finish(G_SUBPROCESS(source), result, &error) &&
-        !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-        g_printerr("Launcher exited with an error: %s\n", error->message);
-    g_object_unref(source);
-}
-
-static void launch_relapse(gpointer user_data)
-{
-    App *app = user_data;
-    if (!app->launcher_path || !*app->launcher_path) {
-        window_show_settings(app->window);
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Select a launcher first");
-        gtk_alert_dialog_set_detail(alert, "Choose your launcher executable under Profiles in Settings, then try again.");
-        gtk_alert_dialog_show(alert, app->window);
-        return;
-    }
-    if (relapse_process_running()) {
-        window_set_launch_enabled(app->window, FALSE);
-        return;
-    }
-    g_autoptr(GError) error = NULL;
-    GSubprocess *process = launcher_launch(app->launcher_path, &error);
-    if (!process) {
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not launch Relapse");
-        gtk_alert_dialog_set_detail(alert, error->message);
-        gtk_alert_dialog_show(alert, app->window);
-        return;
-    }
-    /* Keep the process object alive until it exits so GLib reaps the child;
-     * the launcher itself is detached in its own session. */
-    window_set_launch_enabled(app->window, FALSE);
-    g_subprocess_wait_async(process, NULL, launcher_finished, NULL);
-    refresh_profiles(app);
+    return TRUE;
 }
 
 static void execute_script(gpointer user_data)
 {
     App *app = user_data;
     GtkTextBuffer *buffer = window_get_buffer(app->window);
-    if (!buffer || !sessions_can_execute(app->sessions, app->socket_path))
+    if (!buffer || !app->socket_paths || !app->socket_paths[0])
         return;
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buffer, &start, &end);
     g_autofree char *source = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
-    switch (sessions_execute(app->sessions, app->socket_path, window_get_script_name(app->window), source)) {
-        case SOCKET_CLIENT_QUEUED:
-            break;
-        case SOCKET_CLIENT_NOT_READY:
-            g_printerr("Executor is not ready\n");
-            break;
-        case SOCKET_CLIENT_TOO_LARGE:
-            g_printerr("Script is too large\n");
-            break;
-        case SOCKET_CLIENT_BACKPRESSURE:
-            g_printerr("Send queue is full — try again\n");
-            break;
-        case SOCKET_CLIENT_IDS_EXHAUSTED:
-            g_printerr("Restart to reset script IDs\n");
-            break;
+    g_autofree char *name = g_strdup(window_get_script_name(app->window));
+    g_auto(GStrv) targets = g_strdupv(app->socket_paths);
+    for (guint i = 0; targets[i]; ++i) {
+        const char *failure = NULL;
+        SocketClientSendResult result = sessions_can_execute(app->sessions, targets[i])
+            ? sessions_execute(app->sessions, targets[i], name, source) : SOCKET_CLIENT_NOT_READY;
+        switch (result) {
+            case SOCKET_CLIENT_QUEUED: continue;
+            case SOCKET_CLIENT_NOT_READY: failure = "Client is not ready; script was not sent."; break;
+            case SOCKET_CLIENT_TOO_LARGE: failure = "Script is too large."; break;
+            case SOCKET_CLIENT_BACKPRESSURE: failure = "Send queue is full — try again."; break;
+            case SOCKET_CLIENT_IDS_EXHAUSTED: failure = "Restart to reset script IDs."; break;
+        }
+        window_append_output(app->window, targets[i], "error", failure);
+        g_printerr("%s: %s\n", targets[i], failure);
     }
 }
 
@@ -298,6 +517,8 @@ static void window_destroyed(GtkWidget *window, gpointer user_data)
         app->discovery = 0;
     }
     g_clear_pointer(&app->sessions, sessions_free);
+    g_hash_table_remove_all(app->dialogs);
+    g_hash_table_remove_all(app->consoles);
 }
 
 static void free_app(gpointer user_data)
@@ -306,8 +527,11 @@ static void free_app(gpointer user_data)
     window_destroyed(NULL, app);
     g_free(app->scripts_path);
     g_free(app->launcher_path);
-    g_free(app->socket_path);
+    g_free(app->accent);
+    g_strfreev(app->socket_paths);
     g_hash_table_unref(app->launches);
+    g_hash_table_unref(app->consoles);
+    g_hash_table_unref(app->dialogs);
     g_free(app);
 }
 
@@ -315,7 +539,11 @@ static void startup(GtkApplication *application, gpointer user_data)
 {
     (void)application;
     (void)user_data;
-    style_install(gdk_display_get_default());
+    GdkDisplay *display = gdk_display_get_default();
+    GtkIconTheme *icons = gtk_icon_theme_get_for_display(display);
+    gtk_icon_theme_add_resource_path(icons, "/org/relapse/RelapseGtk/icons");
+    gtk_window_set_default_icon_name("org.relapse.RelapseGtk");
+    style_install(display);
 }
 
 static void activate(GtkApplication *application, gpointer user_data)
@@ -329,31 +557,35 @@ static void activate(GtkApplication *application, gpointer user_data)
 
     App *app = g_new0(App, 1);
     app->launches = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
-    app->scripts_path = g_build_filename(g_get_home_dir(), "relapse-scripts-tmpdir", NULL);
-    AppearanceSettings appearance = appearance_settings_defaults();
-    g_autoptr(GError) appearance_error = NULL;
-    if (!appearance_settings_load(&appearance, &appearance_error))
-        g_printerr("Could not load appearance settings: %s\n", appearance_error->message);
-    if (!style_set_theme(appearance.theme, appearance.opacity)) {
-        g_printerr("Color scheme \"%s\" is unavailable; using %s\n",
-                   appearance.theme ? appearance.theme : "unknown", style_default_theme_id());
-        style_set_theme(style_default_theme_id(), appearance.opacity);
-        g_free(appearance.theme);
-        appearance.theme = g_strdup(style_default_theme_id());
+    app->consoles = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_console_view);
+    app->dialogs = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_hash_table_unref);
+    g_autoptr(GError) settings_error = NULL;
+    app->scripts_path = scripts_settings_load(&settings_error);
+    if (!app->scripts_path) {
+        g_printerr("Could not load script folder preference: %s\n", settings_error->message);
+        app->scripts_path = scripts_directory_default();
     }
+    g_clear_error(&settings_error);
+    if (!appearance_settings_load(&app->accent, &app->shader_strip_visible,
+                                  &app->topographic_visible, &settings_error))
+        g_printerr("Could not load appearance settings: %s\n", settings_error->message);
+    style_set_accent(gdk_display_get_default(), app->accent);
     WindowHandlers window_handlers = {
         .execute = execute_script, .open_script = open_script, .active_script_changed = update_execute,
         .editor_settings_changed = save_editor_settings, .restore_tabs_changed = save_restore_tabs,
-        .output_changed = save_output, .launcher_changed = save_launcher,
-        .appearance_changed = save_appearance,
+        .output_changed = save_output, .launcher_changed = save_launcher, .scripts_changed = save_scripts_path,
+        .accent_changed = save_accent,
+        .shader_strip_changed = save_shader_strip,
+        .topographic_changed = save_topographic,
         .socket_selected = select_socket, .launch_profile = launch_profile, .profile_running = profile_running,
-        .launch_relapse = launch_relapse
+        .profile_session = profile_session
     };
     app->window = window_new(application, app->scripts_path, &window_handlers, app);
-    window_set_appearance(app->window, &appearance);
-    appearance_settings_clear(&appearance);
+    window_set_accent(app->window, app->accent);
+    window_set_shader_strip_visible(app->window, app->shader_strip_visible);
+    window_set_topographic_visible(app->window, app->topographic_visible);
     EditorSettings settings;
-    g_autoptr(GError) settings_error = NULL;
+    g_clear_error(&settings_error);
     if (!editor_settings_load(&settings, &settings_error))
         g_printerr("Could not load settings: %s\n", settings_error->message);
     window_set_editor_settings(app->window, &settings);
@@ -384,7 +616,11 @@ static void activate(GtkApplication *application, gpointer user_data)
     }
     SessionHandlers session_handlers = {
         .state_changed = socket_state_changed, .output_changed = output_state_changed,
-        .entry = output_entry, .result = script_result
+        .entry = output_entry, .result = script_result,
+        .console_show = console_show, .console_title = console_title, .console_clear = console_clear,
+        .console_entry = console_entry, .console_input = console_input, .console_destroy = console_destroy,
+        .dialog_open = dialog_open, .dialog_close = dialog_close, .dialogs_reset = dialogs_reset,
+        .ready_changed = ready_changed
     };
     app->sessions = sessions_new(&session_handlers, app);
     sessions_set_output_enabled(app->sessions, app->redirect_output);
@@ -392,6 +628,9 @@ static void activate(GtkApplication *application, gpointer user_data)
     refresh_profiles(app);
     app->discovery = g_timeout_add_seconds(1, refresh_profiles, app);
     gtk_window_present(app->window);
+#ifdef RELAPSEGTK_UPDATE_ENABLED
+    check_updates(app);
+#endif
 }
 
 int app_run(int argc, char **argv)

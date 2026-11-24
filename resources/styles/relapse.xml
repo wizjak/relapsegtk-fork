@@ -1,31 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <style-scheme id="relapse" name="Relapse" version="1.0">
-  <description>The app-owned editor palette (Aurora).</description>
-  <color name="background" value="#12101a"/>
-  <color name="foreground" value="#eceaf4"/>
-  <color name="muted" value="#8d8a9e"/>
-  <color name="line" value="#191723"/>
-  <color name="selection" value="#3e3550"/>
-  <color name="keyword" value="#c5a9eb"/>
-  <color name="string" value="#a8d59b"/>
-  <color name="number" value="#d8b183"/>
-  <color name="function" value="#8fc2e8"/>
-  <color name="error" value="#ee929b"/>
+  <description>The app-owned editor palette.</description>
+  <color name="background" value="#050607"/>
+  <color name="clear" value="#00000000"/>
+  <color name="foreground" value="#e8ebf0"/>
+  <color name="muted" value="#6b7480"/>
+  <color name="line" value="#0d1115"/>
+  <color name="selection" value="#25313c"/>
+  <color name="keyword" value="#c4a7ff"/>
+  <color name="string" value="#8fe3b0"/>
+  <color name="number" value="#f2c77d"/>
+  <color name="function" value="#7cc7ff"/>
+  <color name="error" value="#ff6b7d"/>
 
-  <style name="text" foreground="foreground" background="background"/>
+  <style name="text" foreground="foreground" background="clear"/>
   <style name="selection" foreground="foreground" background="selection"/>
   <style name="selection-unfocused" foreground="foreground" background="selection"/>
   <style name="cursor" foreground="foreground"/>
   <style name="current-line" background="line"/>
-  <style name="line-numbers" foreground="muted" background="background"/>
-  <style name="line-numbers-border" background="background"/>
+  <style name="line-numbers" foreground="muted" background="clear"/>
+  <style name="line-numbers-border" background="clear"/>
   <style name="current-line-number" foreground="foreground" background="line" bold="true"/>
   <style name="bracket-match" foreground="foreground" background="selection" bold="true"/>
   <style name="bracket-mismatch" foreground="error" underline="error"/>
   <style name="draw-spaces" foreground="muted"/>
   <style name="search-match" foreground="background" background="number"/>
 
-  <style name="def:comment" foreground="muted"/>
+  <style name="def:comment" foreground="muted" italic="true"/>
   <style name="def:keyword" foreground="keyword"/>
   <style name="def:statement" foreground="keyword"/>
   <style name="def:type" foreground="function"/>

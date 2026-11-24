@@ -1,8 +1,10 @@
+#define _GNU_SOURCE
 #include "store.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <glib/gstdio.h>
+#include <json-glib/json-glib.h>
 #include <linux/fs.h>
 #include <string.h>
 #include <sys/file.h>
@@ -24,7 +26,61 @@ gboolean profile_name_valid(const char *name)
 
 static char *profiles_directory(void)
 {
-    return g_build_filename(g_get_home_dir(), ".local", "share", "relapse", "profiles", NULL);
+    return g_build_filename(g_get_user_data_dir(), "relapse", "profiles", NULL);
+}
+
+static char *profile_config_file(const char *name)
+{
+    g_autofree char *directory = g_build_filename(g_get_user_config_dir(), "relapse", "profiles", name, NULL);
+    return g_build_filename(directory, "config.json", NULL);
+}
+
+char *profile_data_directory(const char *name, GError **error)
+{
+    if (!profile_name_valid(name)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid profile name.");
+        return NULL;
+    }
+    g_autofree char *directory = profiles_directory();
+    g_autofree char *fallback = g_build_filename(directory, name, NULL);
+    g_autofree char *path = profile_config_file(name);
+    GStatBuf info;
+    if (g_stat(path, &info) != 0) {
+        if (errno == ENOENT) return g_steal_pointer(&fallback);
+        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
+            "Could not inspect profile configuration: %s", g_strerror(errno));
+        return NULL;
+    }
+    if (!S_ISREG(info.st_mode) || info.st_size > 1024 * 1024) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Invalid profile configuration file.");
+        return NULL;
+    }
+    g_autofree char *contents = NULL;
+    gsize size;
+    if (!g_file_get_contents(path, &contents, &size, error)) return NULL;
+    if (size > 1024 * 1024 || (size && memchr(contents, 0, size))) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Invalid profile configuration file.");
+        return NULL;
+    }
+    g_autoptr(JsonParser) parser = json_parser_new();
+    if (!json_parser_load_from_data(parser, contents, size, error)) return NULL;
+    JsonNode *root = json_parser_get_root(parser);
+    if (!root || !JSON_NODE_HOLDS_OBJECT(root)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Profile configuration must be an object.");
+        return NULL;
+    }
+    JsonNode *data_dir = json_object_get_member(json_node_get_object(root), "dataDir");
+    if (!data_dir) return g_steal_pointer(&fallback);
+    if (!JSON_NODE_HOLDS_VALUE(data_dir) || json_node_get_value_type(data_dir) != G_TYPE_STRING) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Profile dataDir must be a string.");
+        return NULL;
+    }
+    const char *configured = json_node_get_string(data_dir);
+    if (!configured || !*configured || !g_path_is_absolute(configured)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Profile dataDir must be an absolute path.");
+        return NULL;
+    }
+    return g_strdup(configured);
 }
 
 gboolean profile_create(const char *name, GError **error)
@@ -93,6 +149,124 @@ gboolean profile_rename(const char *name, const char *replacement, GError **erro
     return FALSE;
 }
 
+static int open_overlay_work(int profile, GError **error)
+{
+    int current = dup(profile);
+    if (current < 0) {
+        g_set_error(error, G_IO_ERROR, g_io_error_from_errno(errno), "Could not inspect profile: %s", g_strerror(errno));
+        return -1;
+    }
+    const char *parts[] = {"state", "assets-work", "work"};
+    for (guint i = 0; i < G_N_ELEMENTS(parts); ++i) {
+        int next = openat(current, parts[i], O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        int failure = errno;
+        close(current);
+        if (next < 0) {
+            if (failure != ENOENT)
+                g_set_error(error, G_IO_ERROR, g_io_error_from_errno(failure),
+                    "Could not inspect overlay work directory: %s", g_strerror(failure));
+            return -1;
+        }
+        current = next;
+    }
+    return current;
+}
+
+static int set_work_permissions(int fd, mode_t mode)
+{
+    /* O_PATH opens a mode-000 directory without needing read access. The proc
+     * descriptor keeps chmod tied to that inode even after the move to Trash. */
+    char path[64];
+    g_snprintf(path, sizeof path, "/proc/self/fd/%d", fd);
+    return chmod(path, mode);
+}
+
+static void delete_profile(GTask *task, gpointer source_object, gpointer task_data, GCancellable *cancellable)
+{
+    (void)source_object;
+    const char *name = task_data;
+    if (!profile_name_valid(name)) {
+        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid profile name.");
+        return;
+    }
+    g_autofree char *directory = profiles_directory();
+    int parent = g_open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW, 0);
+    int source = parent < 0 ? -1 : openat(parent, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    int lock = source < 0 ? -1 : openat(source, ".lock", O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+    int failure = errno;
+    gboolean ready = FALSE, deleted = FALSE;
+    g_autoptr(GError) error = NULL;
+    struct stat info, current;
+    if (lock >= 0) {
+        if (fstat(lock, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != getuid()) {
+            failure = EACCES;
+        } else if (flock(lock, LOCK_EX | LOCK_NB) != 0) {
+            failure = errno;
+        } else if (fstat(source, &info) != 0 || fstatat(parent, name, &current, AT_SYMLINK_NOFOLLOW) != 0) {
+            failure = errno;
+        } else if (info.st_uid != getuid() || current.st_dev != info.st_dev || current.st_ino != info.st_ino) {
+            failure = ESTALE;
+        } else {
+            ready = TRUE;
+        }
+    }
+    int work = -1;
+    mode_t work_mode = 0;
+    gboolean work_changed = FALSE;
+    if (ready) {
+        work = open_overlay_work(source, &error);
+        if (work >= 0) {
+            if (fstat(work, &info) != 0) {
+                g_set_error(&error, G_IO_ERROR, g_io_error_from_errno(errno),
+                    "Could not inspect overlay work permissions: %s", g_strerror(errno));
+            } else if (info.st_uid != getuid()) {
+                g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                    "The overlay work directory must belong to you.");
+            } else {
+                work_mode = info.st_mode & 07777;
+                if ((work_mode & 0700) != 0700) {
+                    if (set_work_permissions(work, work_mode | 0700) == 0) work_changed = TRUE;
+                    else g_set_error(&error, G_IO_ERROR, g_io_error_from_errno(errno),
+                        "Could not unlock overlay work directory: %s", g_strerror(errno));
+                }
+            }
+        }
+    }
+    if (ready && !error) {
+        g_autofree char *path = g_build_filename(directory, name, NULL);
+        g_autoptr(GFile) file = g_file_new_for_path(path);
+        deleted = g_file_trash(file, cancellable, &error);
+    } else if (!ready && (failure == EWOULDBLOCK || failure == EAGAIN)) {
+        g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_BUSY, "Close this profile before deleting it.");
+    } else if (!ready) {
+        g_set_error(&error, G_IO_ERROR, g_io_error_from_errno(failure),
+            "Could not delete profile: %s", g_strerror(failure));
+    }
+    if (!deleted && work_changed && set_work_permissions(work, work_mode) != 0)
+        g_prefix_error(&error, "Could not restore overlay work permissions (%s). ", g_strerror(errno));
+    if (work >= 0) close(work);
+    if (lock >= 0) close(lock);
+    if (source >= 0) close(source);
+    if (parent >= 0) close(parent);
+    if (deleted) g_task_return_boolean(task, TRUE);
+    else g_task_return_error(task, g_steal_pointer(&error));
+}
+
+void profile_delete_async(const char *name, GCancellable *cancellable,
+                          GAsyncReadyCallback callback, gpointer user_data)
+{
+    g_autoptr(GTask) task = g_task_new(NULL, cancellable, callback, user_data);
+    g_task_set_task_data(task, g_strdup(name), g_free);
+    /* Report a successful move even if the dialog closes just after it finishes. */
+    g_task_set_check_cancellable(task, FALSE);
+    g_task_run_in_thread(task, delete_profile);
+}
+
+gboolean profile_delete_finish(GAsyncResult *result, GError **error)
+{
+    return g_task_propagate_boolean(G_TASK(result), error);
+}
+
 static gint compare_names(gconstpointer a, gconstpointer b)
 {
     return g_strcmp0(*(char *const *)a, *(char *const *)b);
@@ -105,19 +279,32 @@ static char **finish_list(GPtrArray *items)
     return (char **)g_ptr_array_free(items, FALSE);
 }
 
-char **profiles_list(void)
+static void collect_profiles(const char *directory, GHashTable *names)
 {
-    g_autofree char *directory = profiles_directory();
     g_autoptr(GDir) dir = g_dir_open(directory, 0, NULL);
-    GPtrArray *items = g_ptr_array_new_with_free_func(g_free);
     const char *name;
     while (dir && (name = g_dir_read_name(dir))) {
-        if (!profile_name_valid(name)) continue;
+        if (!profile_name_valid(name) || g_hash_table_contains(names, name)) continue;
         g_autofree char *path = g_build_filename(directory, name, NULL);
         struct stat info;
         if (g_lstat(path, &info) == 0 && S_ISDIR(info.st_mode))
-            g_ptr_array_add(items, g_strdup(name));
+            g_hash_table_add(names, g_strdup(name));
     }
+}
+
+char **profiles_list(void)
+{
+    g_autoptr(GHashTable) names = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    g_autofree char *configured = g_build_filename(g_get_user_config_dir(), "relapse", "profiles", NULL);
+    g_autofree char *legacy = profiles_directory();
+    collect_profiles(configured, names);
+    collect_profiles(legacy, names);
+    GPtrArray *items = g_ptr_array_new_with_free_func(g_free);
+    GHashTableIter iter;
+    gpointer name;
+    g_hash_table_iter_init(&iter, names);
+    while (g_hash_table_iter_next(&iter, &name, NULL))
+        g_ptr_array_add(items, g_strdup(name));
     return finish_list(items);
 }
 
@@ -164,12 +351,14 @@ char **profile_sockets_list(const char *directory)
 
 gboolean profile_is_running(const char *name)
 {
-    if (!profile_name_valid(name)) return FALSE;
-    g_autofree char *directory = profiles_directory();
-    g_autofree char *path = g_build_filename(directory, name, ".lock", NULL);
+    g_autofree char *directory = profile_data_directory(name, NULL);
+    if (!directory) return FALSE;
+    g_autofree char *path = g_build_filename(directory, ".lock", NULL);
     int fd = g_open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
     if (fd < 0) return FALSE;
-    gboolean busy = flock(fd, LOCK_EX | LOCK_NB) != 0 && (errno == EWOULDBLOCK || errno == EAGAIN);
+    /* Status readers may overlap; only an exclusive launcher/maintenance lock
+     * should make the profile appear busy. */
+    gboolean busy = flock(fd, LOCK_SH | LOCK_NB) != 0 && (errno == EWOULDBLOCK || errno == EAGAIN);
     close(fd);
     return busy;
 }
@@ -180,96 +369,62 @@ static void detach_launcher(gpointer user_data)
     setsid();
 }
 
-static gboolean launcher_valid(const char *launcher, GError **error)
+char *profile_join_uri(const char *place_id, const char *job_id, GError **error)
 {
-    if (!launcher || !g_path_is_absolute(launcher) ||
-        !g_file_test(launcher, G_FILE_TEST_IS_REGULAR) || g_access(launcher, X_OK) != 0) {
-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
-            "Select an executable launcher in Settings first.");
-        return FALSE;
-    }
-    return TRUE;
-}
-
-static gboolean process_name_matches(const char *name, const char *target)
-{
-    if (!name || !*name || !target || !*target)
-        return FALSE;
-    if (g_ascii_strcasecmp(name, target) == 0)
-        return TRUE;
-    /* Linux stores at most 15 bytes in /proc/<pid>/comm. */
-    size_t length = strlen(name);
-    return length == 15 && strlen(target) > 15 &&
-        g_ascii_strncasecmp(name, target, 15) == 0;
-}
-
-static gboolean process_is_zombie(const char *pid)
-{
-    g_autofree char *path = g_strdup_printf("/proc/%s/stat", pid);
-    g_autofree char *contents = NULL;
-    if (!g_file_get_contents(path, &contents, NULL, NULL))
-        return FALSE;
-    char *close = strrchr(contents, ')');
-    return close && close[1] == ' ' && close[2] == 'Z';
-}
-
-gboolean processes_running(const char *const *names)
-{
-    if (!names)
-        return FALSE;
-    g_autoptr(GDir) dir = g_dir_open("/proc", 0, NULL);
-    if (!dir)
-        return FALSE;
-    pid_t self = getpid();
-    const char *entry;
-    while ((entry = g_dir_read_name(dir))) {
-        if (!g_ascii_isdigit(entry[0])) continue;
-        pid_t pid = (pid_t)g_ascii_strtoll(entry, NULL, 10);
-        if (pid <= 0 || pid == self || process_is_zombie(entry)) continue;
-
-        g_autofree char *exe_path = g_strdup_printf("/proc/%s/exe", entry);
-        g_autofree char *exe = g_file_read_link(exe_path, NULL);
-        if (exe) {
-            g_autofree char *basename = g_path_get_basename(exe);
-            for (guint i = 0; names[i]; ++i)
-                if (process_name_matches(basename, names[i]))
-                    return TRUE;
-        }
-
-        g_autofree char *comm_path = g_strdup_printf("/proc/%s/comm", entry);
-        g_autofree char *comm = NULL;
-        if (!g_file_get_contents(comm_path, &comm, NULL, NULL)) continue;
-        g_strchomp(comm);
-        for (guint i = 0; names[i]; ++i)
-            if (process_name_matches(comm, names[i]))
-                return TRUE;
-    }
-    return FALSE;
-}
-
-GSubprocess *launcher_launch(const char *launcher, GError **error)
-{
-    if (!launcher_valid(launcher, error))
+    g_autofree char *place = g_strdup(place_id ? place_id : "");
+    g_autofree char *job = g_strdup(job_id ? job_id : "");
+    g_strstrip(place);
+    g_strstrip(job);
+    if (!*place) {
+        if (*job) g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+            "A Job ID needs a Place ID.");
         return NULL;
-    g_autoptr(GSubprocessLauncher) spawn = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE);
-    g_subprocess_launcher_set_child_setup(spawn, detach_launcher, NULL, NULL);
-    return g_subprocess_launcher_spawn(spawn, error, launcher, NULL);
+    }
+    guint64 id;
+    if (strspn(place, "0123456789") != strlen(place) ||
+        !g_ascii_string_to_unsigned(place, 10, 1, G_MAXINT64, &id, NULL)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+            "Place ID must be a positive number.");
+        return NULL;
+    }
+    if (*job && !g_uuid_string_is_valid(job)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+            "Enter a valid Job ID.");
+        return NULL;
+    }
+    return g_strdup_printf("roblox://placeId=%" G_GUINT64_FORMAT "%s%s", id,
+        *job ? "&gameInstanceId=" : "", job);
 }
 
-GSubprocess *profile_launch(const char *launcher, const char *name, GError **error)
+GSubprocess *profile_launch(const char *launcher, const char *name,
+                            const char *place_id, const char *job_id, GError **error)
 {
     if (!profile_name_valid(name)) {
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
             "Use 1–64 letters, digits, dots, underscores or hyphens for the Profile name (excluding . and ..).");
         return NULL;
     }
-    if (!launcher_valid(launcher, error))
+    if (!launcher || !g_path_is_absolute(launcher) ||
+        !g_file_test(launcher, G_FILE_TEST_IS_REGULAR) || g_access(launcher, X_OK) != 0) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+            "Select an executable launcher in Settings first.");
         return NULL;
+    }
     if (profile_is_running(name)) {
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "This Profile is already running or being maintained.");
         return NULL;
     }
+    g_autoptr(GError) destination_error = NULL;
+    g_autofree char *uri = profile_join_uri(place_id, job_id, &destination_error);
+    if (destination_error) {
+        g_propagate_error(error, g_steal_pointer(&destination_error));
+        return NULL;
+    }
     g_autoptr(GSubprocessLauncher) spawn = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE);
+    g_subprocess_launcher_unsetenv(spawn, "LD_PRELOAD");
+    g_subprocess_launcher_unsetenv(spawn, "LD_AUDIT");
+    g_subprocess_launcher_unsetenv(spawn, "LD_LIBRARY_PATH");
     g_subprocess_launcher_set_child_setup(spawn, detach_launcher, NULL, NULL);
-    return g_subprocess_launcher_spawn(spawn, error, launcher, "--profile", name, "--no-launch-ui", NULL);
+    const char *argv[] = {launcher, "--profile", name, "--no-launch-ui", uri ? "--" : NULL, uri, NULL};
+    return g_subprocess_launcher_spawnv(spawn, argv, error);
 }
