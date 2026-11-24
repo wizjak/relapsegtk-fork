@@ -1,5 +1,9 @@
 # RelapseGtk
 
+<img width="1020" height="478" alt="image" src="https://github.com/user-attachments/assets/cb954ad3-a0d3-44d9-aaae-37e97cc31d1e" />
+
+relapsegtk readme:
+
 RelapseGtk is a Linux GTK script editor for Relapse. It connects to the local
 Relapse script socket to submit Luau scripts, shows script output, and can
 optionally expose script execution.
